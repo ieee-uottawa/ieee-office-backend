@@ -20,3 +20,16 @@ Content-Type: {{json}}
 {
   "uid": "{{uid}}"
 }
+
+### Create a new member
+POST {{host}}/members
+Content-Type: {{json}}
+
+{
+  "name": "Charlie",
+  "uid": "04:AA:BB:CC:DD"
+}
+
+### List members
+GET {{host}}/members
+Accept: {{json}}

@@ -138,3 +138,73 @@ func TestHandleScan_UnknownUser(t *testing.T) {
 		t.Errorf("Expected 403 Forbidden for unknown user, got %v", rr.Code)
 	}
 }
+
+func TestHandleMembers_Create(t *testing.T) {
+	setupTest()
+
+	payload := []byte(`{"name":"Charlie","uid":"TEST_UID_3"}`)
+	req, _ := http.NewRequest("POST", "/members", bytes.NewBuffer(payload))
+	rr := httptest.NewRecorder()
+
+	handleMembers(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected status 201 Created, got %v; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var m Member
+	if err := json.Unmarshal(rr.Body.Bytes(), &m); err != nil {
+		t.Fatalf("failed to parse response JSON: %v", err)
+	}
+	if m.Name != "Charlie" || m.UID != "TEST_UID_3" {
+		t.Fatalf("unexpected member returned: %+v", m)
+	}
+
+	// Verify DB has the member
+	row := db.QueryRow(`SELECT name, uid FROM members WHERE uid = ?`, "TEST_UID_3")
+	var name, uid string
+	if err := row.Scan(&name, &uid); err != nil {
+		t.Fatalf("member not found in DB: %v", err)
+	}
+}
+
+func TestHandleMembers_CreateDuplicate(t *testing.T) {
+	setupTest()
+
+	// First create
+	payload := []byte(`{"name":"Dave","uid":"TEST_UID_4"}`)
+	req1, _ := http.NewRequest("POST", "/members", bytes.NewBuffer(payload))
+	rr1 := httptest.NewRecorder()
+	handleMembers(rr1, req1)
+	if rr1.Code != http.StatusCreated {
+		t.Fatalf("first create failed: %v", rr1.Code)
+	}
+
+	// Second create with same UID -> should be Conflict
+	req2, _ := http.NewRequest("POST", "/members", bytes.NewBuffer(payload))
+	rr2 := httptest.NewRecorder()
+	handleMembers(rr2, req2)
+	if rr2.Code != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict for duplicate uid, got %v", rr2.Code)
+	}
+}
+
+func TestHandleMembers_List(t *testing.T) {
+	setupTest()
+
+	req, _ := http.NewRequest("GET", "/members", nil)
+	rr := httptest.NewRecorder()
+	handleMembers(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %v", rr.Code)
+	}
+
+	var members []Member
+	if err := json.Unmarshal(rr.Body.Bytes(), &members); err != nil {
+		t.Fatalf("failed to parse members list: %v", err)
+	}
+	if len(members) < 2 {
+		t.Fatalf("expected at least 2 seeded members, got %d", len(members))
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +39,12 @@ type ActiveAttendee struct {
 // Member represents a person with a registered RFID tag
 type Member struct {
 	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	UID  string `json:"uid"`
+}
+
+// CreateMemberRequest is the payload to create a member
+type CreateMemberRequest struct {
 	Name string `json:"name"`
 	UID  string `json:"uid"`
 }
@@ -328,6 +335,86 @@ func handleHistory(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(sessions)
 }
 
+// handleMembers supports POST to create a new member and GET to list members
+func handleMembers(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		var req CreateMemberRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+		req.Name = strings.TrimSpace(req.Name)
+		req.UID = strings.TrimSpace(req.UID)
+		if req.Name == "" || req.UID == "" {
+			http.Error(w, "name and uid are required", http.StatusBadRequest)
+			return
+		}
+
+		// Insert into DB
+		res, err := db.Exec(`INSERT INTO members (name, uid) VALUES (?, ?)`, req.Name, req.UID)
+		if err != nil {
+			// Handle unique constraint on uid
+			if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "unique") {
+				http.Error(w, "UID already exists", http.StatusConflict)
+				return
+			}
+			log.Printf("Error inserting member: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		id, _ := res.LastInsertId()
+
+		// Update in-memory cache
+		mu.Lock()
+		userDB[req.UID] = Member{ID: id, Name: req.Name, UID: req.UID}
+		mu.Unlock()
+
+		// Update members.json
+		fileMembers := make(map[string]string)
+		for uid, member := range userDB {
+			fileMembers[uid] = member.Name
+		}
+		data, _ := json.MarshalIndent(fileMembers, "", "  ")
+		if err := os.WriteFile("members.json", data, 0644); err != nil {
+			log.Printf("Warning: could not update members.json: %v", err)
+		}
+
+		member := Member{ID: id, Name: req.Name, UID: req.UID}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(member)
+
+	case http.MethodGet:
+		// Return list of members
+		rows, err := db.Query(`SELECT id, name, uid FROM members`)
+		if err != nil {
+			log.Printf("Error querying members: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		var members []Member
+		for rows.Next() {
+			var m Member
+			if err := rows.Scan(&m.ID, &m.Name, &m.UID); err != nil {
+				log.Printf("Error scanning member row: %v", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+			members = append(members, m)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(members)
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // --- Main ---
 
 func main() {
@@ -355,6 +442,7 @@ func main() {
 	http.HandleFunc("/scan", handleScan)       // POST: ESP32 sends UID here
 	http.HandleFunc("/current", handleCurrent) // GET: See who is in the room
 	http.HandleFunc("/history", handleHistory) // GET: See past logs
+	http.HandleFunc("/members", handleMembers) // GET: list members, POST: create member
 
 	// Start Server
 	port := ":8080"
