@@ -25,7 +25,6 @@ type ScanRequest struct {
 // Session represents a completed visit (Signin + Signout)
 type Session struct {
 	Name        string    `json:"name"`
-	UID         string    `json:"uid"`
 	SignInTime  time.Time `json:"signin_time"`
 	SignOutTime time.Time `json:"signout_time"`
 }
@@ -114,7 +113,7 @@ func saveSessionToDB(memberID int64, signin time.Time, signout time.Time) error 
 // loadHistoryFromDB retrieves all sessions from the database
 func loadHistoryFromDB() ([]Session, error) {
 	rows, err := db.Query(`
-		SELECT m.name, m.uid, s.signin_time, s.signout_time
+		SELECT m.name, s.signin_time, s.signout_time
 		FROM sessions s
 		JOIN members m ON m.id = s.member_id
 		ORDER BY s.signin_time DESC`)
@@ -127,7 +126,7 @@ func loadHistoryFromDB() ([]Session, error) {
 	for rows.Next() {
 		var s Session
 		var signinTime, signoutTime string
-		err := rows.Scan(&s.Name, &s.UID, &signinTime, &signoutTime)
+		err := rows.Scan(&s.Name, &signinTime, &signoutTime)
 		if err != nil {
 			return nil, err
 		}
