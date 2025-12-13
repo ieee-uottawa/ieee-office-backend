@@ -1,0 +1,14 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ieee-attendance-backend:latest
+    container_name: ieee-attendance-backend
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./attendance.db:/attendance.db
+      - ./members.json:/members.json:ro
+      - ./current_attendees.json:/current_attendees.json
+    restart: unless-stopped
