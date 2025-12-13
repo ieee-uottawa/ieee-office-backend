@@ -15,9 +15,9 @@ import (
 // setupTest resets global state for a clean testing environment
 func setupTest() {
 	// Reset User DB
-	userDB = map[string]string{
-		"TEST_UID_1": "Alice",
-		"TEST_UID_2": "Bob",
+	userDB = map[string]Member{
+		"TEST_UID_1": {ID: 1, Name: "Alice", UID: "TEST_UID_1"},
+		"TEST_UID_2": {ID: 2, Name: "Bob", UID: "TEST_UID_2"},
 	}
 
 	// Reset Active Attendees
@@ -30,15 +30,35 @@ func setupTest() {
 		panic(err)
 	}
 
-	// Re-create the table
-	createTableSQL := `CREATE TABLE IF NOT EXISTS sessions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        uid TEXT NOT NULL,
-        signin_time DATETIME NOT NULL,
-	signout_time DATETIME NOT NULL
-    );`
-	if _, err := db.Exec(createTableSQL); err != nil {
+	// Enable foreign keys and create tables
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON;`); err != nil {
+		panic(err)
+	}
+
+	createMembersSQL := `CREATE TABLE IF NOT EXISTS members (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT NOT NULL,
+		uid TEXT NOT NULL UNIQUE
+	);`
+	if _, err := db.Exec(createMembersSQL); err != nil {
+		panic(err)
+	}
+
+	// Seed members according to userDB
+	for _, m := range userDB {
+		if _, err := db.Exec(`INSERT INTO members (id, name, uid) VALUES (?, ?, ?)`, m.ID, m.Name, m.UID); err != nil {
+			panic(err)
+		}
+	}
+
+	createSessionsSQL := `CREATE TABLE IF NOT EXISTS sessions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		member_id INTEGER NOT NULL,
+		signin_time TEXT NOT NULL,
+		signout_time TEXT NOT NULL,
+		FOREIGN KEY(member_id) REFERENCES members(id) ON DELETE CASCADE
+	);`
+	if _, err := db.Exec(createSessionsSQL); err != nil {
 		panic(err)
 	}
 }
@@ -97,8 +117,8 @@ func TestHandleScan_Logout(t *testing.T) {
 		t.Error("Alice should have been removed from currentAttendees")
 	}
 
-	// Verify DB record exists
-	rows, _ := db.Query("SELECT uid FROM sessions WHERE uid = 'TEST_UID_1'")
+	// Verify DB record exists by joining sessions->members
+	rows, _ := db.Query(`SELECT m.uid FROM sessions s JOIN members m ON m.id = s.member_id WHERE m.uid = 'TEST_UID_1'`)
 	if !rows.Next() {
 		t.Error("No session record found in SQLite")
 	}

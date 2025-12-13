@@ -35,11 +35,18 @@ type ActiveAttendee struct {
 	SignInTime time.Time `json:"signin_time"`
 }
 
+// Member represents a person with a registered RFID tag
+type Member struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	UID  string `json:"uid"`
+}
+
 // --- Global State ---
 
 var (
-	// Lookup map for UID -> Name (loaded from file)
-	userDB map[string]string
+	// In-memory cache for UID -> Member (loaded from DB at startup)
+	userDB map[string]Member
 
 	// Map of attendees currently in room (Map[UID]SignInTime)
 	currentAttendees = make(map[string]time.Time)
@@ -53,7 +60,7 @@ var (
 
 // --- Helpers ---
 
-// initDB initializes the SQLite database and creates the sessions table
+// initDB initializes the SQLite database and creates the members and sessions tables
 func initDB(dbPath string) error {
 	var err error
 	db, err = sql.Open("sqlite", dbPath)
@@ -61,29 +68,49 @@ func initDB(dbPath string) error {
 		return err
 	}
 
-	// Create sessions table if it doesn't exist
-	createTableSQL := `CREATE TABLE IF NOT EXISTS sessions (
+	// Enable foreign keys
+	if _, err = db.Exec(`PRAGMA foreign_keys = ON;`); err != nil {
+		return err
+	}
+
+	// Create members table
+	createMembersSQL := `CREATE TABLE IF NOT EXISTS members (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name TEXT NOT NULL,
-		uid TEXT NOT NULL,
-		signin_time DATETIME NOT NULL,
-		signout_time DATETIME NOT NULL
+		uid TEXT NOT NULL UNIQUE
 	);`
 
-	_, err = db.Exec(createTableSQL)
+	if _, err = db.Exec(createMembersSQL); err != nil {
+		return err
+	}
+
+	// Create sessions table referencing members
+	createSessionsSQL := `CREATE TABLE IF NOT EXISTS sessions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		member_id INTEGER NOT NULL,
+		signin_time TEXT NOT NULL,
+		signout_time TEXT NOT NULL,
+		FOREIGN KEY(member_id) REFERENCES members(id) ON DELETE CASCADE
+	);`
+
+	_, err = db.Exec(createSessionsSQL)
 	return err
 }
 
-// saveSessionToDB saves a completed session to the database
-func saveSessionToDB(session Session) error {
-	insertSQL := `INSERT INTO sessions (name, uid, signin_time, signout_time) VALUES (?, ?, ?, ?)`
-	_, err := db.Exec(insertSQL, session.Name, session.UID, session.SignInTime, session.SignOutTime)
+// saveSessionToDB saves a completed session to the database using member_id
+func saveSessionToDB(memberID int64, signin time.Time, signout time.Time) error {
+	insertSQL := `INSERT INTO sessions (member_id, signin_time, signout_time) VALUES (?, ?, ?)`
+	_, err := db.Exec(insertSQL, memberID, signin.Format(time.RFC3339), signout.Format(time.RFC3339))
 	return err
 }
 
 // loadHistoryFromDB retrieves all sessions from the database
 func loadHistoryFromDB() ([]Session, error) {
-	rows, err := db.Query(`SELECT name, uid, signin_time, signout_time FROM sessions ORDER BY signin_time DESC`)
+	rows, err := db.Query(`
+		SELECT m.name, m.uid, s.signin_time, s.signout_time
+		FROM sessions s
+		JOIN members m ON m.id = s.member_id
+		ORDER BY s.signin_time DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -137,17 +164,71 @@ func loadCurrentAttendees(filename string) error {
 	return json.Unmarshal(bytes, &currentAttendees)
 }
 
-// loadUsers reads the users.json file into our map
-func loadUsers(filename string) error {
+// seedMembersFromFile loads members from a JSON file into the DB if they don't exist, then populates in-memory cache
+func seedMembersFromFile(filename string) error {
 	file, err := os.Open(filename)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
+	// Expect a map of UID -> Name in the JSON file
+	var fileMembers map[string]string
 	bytes, _ := io.ReadAll(file)
-	userDB = make(map[string]string)
-	return json.Unmarshal(bytes, &userDB)
+	if err := json.Unmarshal(bytes, &fileMembers); err != nil {
+		return err
+	}
+
+	// Insert or ignore into members table
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	// if UID already exists, do nothing
+	stmt, err := tx.Prepare(`INSERT INTO members (name, uid) VALUES (?, ?) ON CONFLICT(uid) DO NOTHING`)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	for uid, name := range fileMembers {
+		if _, err := stmt.Exec(name, uid); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	if err := stmt.Close(); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	return loadMembersIntoCache()
+}
+
+// loadMembersIntoCache populates userDB from the members table
+func loadMembersIntoCache() error {
+	rows, err := db.Query(`SELECT id, name, uid FROM members`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	cache := make(map[string]Member)
+	for rows.Next() {
+		var m Member
+		if err := rows.Scan(&m.ID, &m.Name, &m.UID); err != nil {
+			return err
+		}
+		cache[m.UID] = m
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	userDB = cache
+	return nil
 }
 
 // --- Handlers ---
@@ -168,8 +249,8 @@ func handleScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Identify the User
-	name, exists := userDB[req.UID]
+	// Identify the Member
+	member, exists := userDB[req.UID]
 	if !exists {
 		log.Printf("Unknown tag scanned: %s", req.UID)
 		http.Error(w, "Unknown UID", http.StatusForbidden)
@@ -183,15 +264,8 @@ func handleScan(w http.ResponseWriter, r *http.Request) {
 		duration := signOutTime.Sub(signInTime)
 
 		// Create a historical record
-		record := Session{
-			Name:        name,
-			UID:         req.UID,
-			SignInTime:  signInTime,
-			SignOutTime: signOutTime,
-		}
-
 		// Save to database
-		if err := saveSessionToDB(record); err != nil {
+		if err := saveSessionToDB(member.ID, signInTime, signOutTime); err != nil {
 			log.Printf("Error saving session to database: %v", err)
 		}
 
@@ -201,7 +275,7 @@ func handleScan(w http.ResponseWriter, r *http.Request) {
 		// Persist current attendees to file
 		saveCurrentAttendees("current_attendees.json")
 
-		msg := fmt.Sprintf("Goodbye, %s! Duration: %s", name, duration.Round(time.Second))
+		msg := fmt.Sprintf("Goodbye, %s! Duration: %s", member.Name, duration.Round(time.Second))
 		log.Println(msg)
 		json.NewEncoder(w).Encode(map[string]string{"message": msg, "status": "out"})
 
@@ -212,7 +286,7 @@ func handleScan(w http.ResponseWriter, r *http.Request) {
 		// Persist current attendees to file
 		saveCurrentAttendees("current_attendees.json")
 
-		msg := fmt.Sprintf("Welcome, %s!", name)
+		msg := fmt.Sprintf("Welcome, %s!", member.Name)
 		log.Println(msg)
 		json.NewEncoder(w).Encode(map[string]string{"message": msg, "status": "in"})
 	}
@@ -229,7 +303,7 @@ func handleCurrent(w http.ResponseWriter, r *http.Request) {
 	var activeList []ActiveAttendee
 	for uid, signinTime := range currentAttendees {
 		activeList = append(activeList, ActiveAttendee{
-			Name:       userDB[uid],
+			Name:       userDB[uid].Name,
 			SignInTime: signinTime,
 		})
 	}
@@ -264,11 +338,11 @@ func main() {
 	defer db.Close()
 	log.Println("Database initialized successfully.")
 
-	// Load User DB
-	if err := loadUsers("members.json"); err != nil {
-		log.Fatal("Could not load members.json: ", err)
+	// Seed members from file and load into memory cache
+	if err := seedMembersFromFile("members.json"); err != nil {
+		log.Fatal("Could not seed/load members: ", err)
 	}
-	log.Printf("Loaded %d users from members.json.", len(userDB))
+	log.Printf("Loaded %d members into cache.", len(userDB))
 
 	// Load current attendees from file (if exists)
 	if err := loadCurrentAttendees("current_attendees.json"); err != nil {
