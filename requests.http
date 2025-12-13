@@ -1,0 +1,22 @@
+# VS Code REST Client requests
+# Requires extension: humao.rest-client
+
+@host = http://localhost:8080
+@json = application/json
+@uid = 04:A3:B2:11
+
+### Get current attendees
+GET {{host}}/current
+Accept: {{json}}
+
+### Get attendance history
+GET {{host}}/history
+Accept: {{json}}
+
+### Scan: sign in/out with UID
+POST {{host}}/scan
+Content-Type: {{json}}
+
+{
+  "uid": "{{uid}}"
+}
