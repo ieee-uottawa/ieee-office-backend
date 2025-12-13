@@ -1,0 +1,35 @@
+# Ignore Git metadata
+.git
+.gitignore
+
+# Editor/IDE files
+.vscode/
+.idea/
+*.swp
+*~
+
+# Build outputs and binaries
+bin/
+coverage.out
+attendance
+*.exe
+*.dll
+*.so
+
+# Local databases, logs and secrets
+*.db
+.env
+*.key
+*.pem
+*.log
+
+# Node deps (if any)
+node_modules/
+
+# Misc
+.DS_Store
+requests.http
+
+# Go test artifacts
+*_test.go
+*.test
