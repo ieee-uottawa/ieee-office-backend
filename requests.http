@@ -1,0 +1,76 @@
+# VS Code REST Client requests
+# Requires extension: humao.rest-client
+
+@host = http://localhost:8080
+@json = application/json
+@uid = 04:A3:B2:11
+
+### Health check
+GET {{host}}/health
+Accept: {{json}}
+
+### Get current attendees
+GET {{host}}/current
+Accept: {{json}}
+
+### Get attendee count
+GET {{host}}/count
+Accept: {{json}}
+
+### Get scan history (last 10 scans)
+GET {{host}}/scan-history
+Accept: {{json}}
+
+### Get attendance history
+GET {{host}}/history
+Accept: {{json}}
+
+### Scan: sign in/out with UID
+POST {{host}}/scan
+Content-Type: {{json}}
+
+{
+  "uid": "{{uid}}"
+}
+
+### Sign out all attendees
+POST {{host}}/sign-out-all
+Content-Type: {{json}}
+
+### Sign in with Discord ID
+POST {{host}}/sign-in-discord
+Content-Type: {{json}}
+
+{
+  "discord_id": "111111111"
+}
+
+### Sign out with Discord ID
+POST {{host}}/sign-out-discord
+Content-Type: {{json}}
+
+{
+  "discord_id": "111111111"
+}
+
+### Create a new member
+POST {{host}}/members
+Content-Type: {{json}}
+
+{
+  "name": "Charlie",
+  "uid": "04:AA:BB:CC:DD",
+  "discord_id": "333333333"
+}
+
+### List members
+GET {{host}}/members
+Accept: {{json}}
+
+### Export members to JSON file
+GET {{host}}/export-members
+Accept: {{json}}
+
+### Import members from JSON file
+POST {{host}}/import-members
+Content-Type: {{json}}

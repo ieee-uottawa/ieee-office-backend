@@ -1,0 +1,215 @@
+# IEEE Office Backend
+
+Simple Go HTTP service to track office attendance using RFID/UID scans (designed for ESP32 or similar devices). It records sign-in and sign-out events, keeps an in-memory list of current attendees, and persists historical sessions to a local SQLite database.
+
+Can be used by the [IEEE Office Scanner ESP32](https://github.com/ieee-uottawa/ieee-office-scanner-esp32) device and the [IEEE Office Discord Bot](https://github.com/ieee-uottawa/ieee-office-discord-bot) to provide office presence tracking.
+
+## Features
+
+- **Scan endpoint**: Accepts POSTed UID payloads from an RFID reader to toggle sign-in / sign-out.
+- **Current attendees**: Returns who is currently in the room and when they signed in.
+- **History**: Stores completed sessions (signin + signout) in SQLite and exposes them via an API.
+- **Scan history**: Keeps the last 10 scans in memory (uid + timestamp) and exposes them via an API.
+- **Members management**: Create/list registered members (UID, name, discord_id) via API; import/export members with JSON file.
+- **Discord sign-in/out**: Sign in or out by providing a member's `discord_id`.
+- **Nightly cleanup**: Force sign-out of all active attendees at 4:00 AM local time.
+- **Persistent store**: Uses `data/attendance.db` (SQLite) and persists active attendees to `data/current_attendees.json`.
+- **CORS support**: Configurable cross-origin resource sharing for web-based frontends.
+
+## Files of interest
+
+- `main.go` — application source with HTTP handlers for `/scan`, `/current`, `/history`, and `/members`.
+- `Dockerfile` — multi-stage build for producing a small runtime container.
+- `docker-compose.yml` — convenient compose file to run the service locally.
+- `data/` — folder for runtime files: `members.json`, `current_attendees.json`, `attendance.db`.
+
+## Requirements
+
+- Go toolchain (tested with Go 1.25). The project uses modules — `go.mod` is present.
+- Docker (optional) to build and run the containerized image.
+
+## Quick Start — Run locally
+
+- Run directly (development):
+
+```bash
+go run .
+```
+
+- Build a local binary and run:
+
+```bash
+go build -o attendance .
+./attendance
+```
+
+The server listens on `:8080` by default.
+
+## Configuration
+
+The server can be configured using environment variables:
+
+- `ALLOWED_ORIGINS` - CORS allowed origins (default: `*` for all origins)
+  - Set to specific origins for production: `ALLOWED_ORIGINS=https://yourdomain.com`
+  - Use comma-separated list for multiple origins: `ALLOWED_ORIGINS=http://localhost:3000,https://yourdomain.com`
+
+Copy `.env.example` to `.env` and customize as needed.
+
+## Using Docker
+
+- Build the image locally:
+
+```bash
+docker build -t ieee-office-backend:latest .
+```
+
+- Run container (mount `./data` so records persist on the host):
+
+```bash
+docker run --rm -p 8080:8080 -v "$(pwd)/data:/data" ieee-office-backend:latest
+```
+
+## Using Docker Compose
+
+- Start service with compose (the included `docker-compose.yml` mounts `./data` into the container at `/data`):
+
+```bash
+docker compose up --build
+```
+
+Persistent Data & File Layout
+
+- `data/members.json` — used by the export/import endpoints. Expected format: a JSON array of members, each with `name`, `uid`, and `discord_id`. Example:
+
+```json
+[
+    { "name": "Alice", "uid": "UID_ABC_123", "discord_id": "111111111" },
+    { "name": "Bob",   "uid": "UID_XYZ_456", "discord_id": "222222222" }
+]
+```
+
+- `data/current_attendees.json` — automatically written/loaded by the server to track currently signed-in UIDs.
+- `data/attendance.db` — SQLite DB file created by the app to store members and sessions.
+
+## HTTP API
+
+- `POST /scan` — body: `{ "uid": "<UID string>" }`. The server will:
+      - Return `status: "in"` on successful sign-in.
+      - Return `status: "out"` on sign-out and persist a session to the DB.
+      - Unknown UID returns HTTP `403 Forbidden`.
+
+Example:
+
+```bash
+curl -X POST http://localhost:8080/scan -H 'Content-Type: application/json' \
+    -d '{"uid":"UID_ABC_123"}'
+```
+
+- `GET /scan_history` — returns the last 10 scans (newest first). Each item has `uid` and `time` (RFC3339).
+
+```bash
+curl http://localhost:8080/scan_history
+```
+
+- `GET /current` — returns JSON array of currently signed-in users (name + signin_time).
+
+```bash
+curl http://localhost:8080/current
+```
+
+- `GET /history` — returns historical sessions (name, signin_time, signout_time).
+
+```bash
+curl http://localhost:8080/history
+```
+
+- `GET /members` — returns registered members stored in the DB.
+
+```bash
+curl http://localhost:8080/members
+```
+
+- `POST /members` — create a new member. Body: `{ "name": "Charlie", "uid": "UID_123", "discord_id": "333333333" }`.
+
+```bash
+curl -X POST http://localhost:8080/members -H 'Content-Type: application/json' \
+    -d '{"name":"Charlie","uid":"UID_123","discord_id":"333333333"}'
+```
+
+- `GET /count` — returns the count of currently signed-in attendees.
+
+```bash
+curl http://localhost:8080/count
+```
+
+Response: `{"count": 3}`
+
+- `GET /health` — health check endpoint that returns `200 OK` with "OK" text response.
+
+```bash
+curl http://localhost:8080/health
+```
+
+- `POST /signout_all` — signs out all currently signed-in attendees. Returns a message with the count of people signed out.
+
+```bash
+curl -X POST http://localhost:8080/signout_all
+```
+
+Response: `{"message": "Signed out all attendees (3 total)."}`
+
+- `POST /signin_discord` — sign in a member by Discord ID. Body: `{ "discord_id": "111111111" }`.
+
+```bash
+curl -X POST http://localhost:8080/signin_discord -H 'Content-Type: application/json' \
+    -d '{"discord_id":"111111111"}'
+```
+
+- `POST /signout_discord` — sign out a member by Discord ID. Body: `{ "discord_id": "111111111" }`.
+
+```bash
+curl -X POST http://localhost:8080/signout_discord -H 'Content-Type: application/json' \
+    -d '{"discord_id":"111111111"}'
+```
+
+- `GET /export_members` — export all members to `data/members.json`.
+
+```bash
+curl http://localhost:8080/export_members
+```
+
+- `POST /import_members` — import members from `data/members.json` into the database (existing UIDs are ignored).
+
+```bash
+curl -X POST http://localhost:8080/import_members
+```
+
+## Testing
+
+- Unit tests are included; run them with:
+
+```bash
+go test ./...
+```
+
+- Recommended (race detector):
+
+```bash
+go test -race ./...
+```
+
+## Deployment notes
+
+- Keep the `data/` folder mounted on persistent storage when running in containers so the SQLite DB and current attendees are not lost between restarts.
+- The service is intentionally simple (no auth). If you expose it publicly, add authentication (e.g., API key, basic auth, or reverse-proxy with auth) and TLS in front of it.
+
+## Implementation Notes
+
+- Concurrency: shared in-memory maps are protected by an `RWMutex`. File I/O and DB operations are performed outside of locks where possible to avoid blocking.
+- Nightly cleanup at 4:00 AM clears active attendees. Sign out times are set to 4:00 AM for those sessions.
+
+## Extending / Next steps
+
+- Add authentication for management endpoints.
+- Add pagination/filters for `/history`.
+- Add metrics for monitoring.

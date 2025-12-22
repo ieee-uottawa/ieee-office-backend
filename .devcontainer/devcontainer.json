@@ -1,0 +1,28 @@
+{
+  "name": "Go 1.25 Dev Env",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "go.toolsManagement.checkForUpdates": "local",
+        "go.useLanguageServer": true,
+        "go.gopath": "/go"
+      },
+      "extensions": [
+        "golang.Go",
+        "alexcvzz.vscode-sqlite" 
+      ]
+    }
+  },
+  // Map the current workspace folder
+  "remoteUser": "root", 
+  
+  // Forward port 8080 so you can access localhost:8080 outside the container
+  "forwardPorts": [8080],
+
+  // Post-create command to download dependencies automatically
+  "postCreateCommand": "go mod download && echo 'Ready to code!'"
+}
