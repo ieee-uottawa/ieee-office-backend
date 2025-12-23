@@ -1,8 +1,8 @@
 {
-  "name": "Go 1.25 Dev Env",
+  "name": "IEEE Office Backend Go 1.25 Dev Env",
   "build": {
     "dockerfile": "Dockerfile",
-    "context": ".."
+    "context": "."
   },
   "customizations": {
     "vscode": {
