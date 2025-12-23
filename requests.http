@@ -4,6 +4,7 @@
 @host = http://localhost:8080
 @json = application/json
 @uid = 04:A3:B2:11
+@api-key = MY_SECRET_API_KEY
 
 ### Health check
 GET {{host}}/health
@@ -12,22 +13,32 @@ Accept: {{json}}
 ### Get current attendees
 GET {{host}}/current
 Accept: {{json}}
+Headers:
+  x-api-key: {{api-key}}
 
 ### Get attendee count
 GET {{host}}/count
 Accept: {{json}}
+Headers:
+  x-api-key: {{api-key}}
 
 ### Get scan history (last 10 scans)
 GET {{host}}/scan-history
 Accept: {{json}}
+Headers:
+  x-api-key: {{api-key}}
 
 ### Get attendance history
 GET {{host}}/history
 Accept: {{json}}
+Headers:
+  x-api-key: {{api-key}}
 
 ### Scan: sign in/out with UID
 POST {{host}}/scan
 Content-Type: {{json}}
+Headers:
+  x-api-key: {{api-key}}
 
 {
   "uid": "{{uid}}"
@@ -36,10 +47,14 @@ Content-Type: {{json}}
 ### Sign out all attendees
 POST {{host}}/sign-out-all
 Content-Type: {{json}}
+Headers:
+  x-api-key: {{api-key}}
 
 ### Sign in with Discord ID
 POST {{host}}/sign-in-discord
 Content-Type: {{json}}
+Headers:
+  x-api-key: {{api-key}}
 
 {
   "discord_id": "111111111"
@@ -48,6 +63,8 @@ Content-Type: {{json}}
 ### Sign out with Discord ID
 POST {{host}}/sign-out-discord
 Content-Type: {{json}}
+Headers:
+  x-api-key: {{api-key}}
 
 {
   "discord_id": "111111111"
@@ -56,6 +73,8 @@ Content-Type: {{json}}
 ### Create a new member
 POST {{host}}/members
 Content-Type: {{json}}
+Headers:
+  x-api-key
 
 {
   "name": "Charlie",
@@ -66,11 +85,17 @@ Content-Type: {{json}}
 ### List members
 GET {{host}}/members
 Accept: {{json}}
+Headers:
+  x-api-key: {{api-key}}
 
 ### Export members to JSON file
 GET {{host}}/export-members
 Accept: {{json}}
+Headers:
+  x-api-key: {{api-key}}
 
 ### Import members from JSON file
 POST {{host}}/import-members
 Content-Type: {{json}}
+Headers:
+  x-api-key: {{api-key}}

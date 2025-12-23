@@ -43,7 +43,7 @@ go build -o attendance .
 ./attendance
 ```
 
-The server listens on `:8080` by default.
+The server listens on `:8080` by default. Set the environmental variables as needed (see Configuration below).
 
 ## Configuration
 
@@ -52,6 +52,13 @@ The server can be configured using environment variables:
 - `ALLOWED_ORIGINS` - CORS allowed origins (default: `*` for all origins)
   - Set to specific origins for production: `ALLOWED_ORIGINS=https://yourdomain.com`
   - Use comma-separated list for multiple origins: `ALLOWED_ORIGINS=http://localhost:3000,https://yourdomain.com`
+- `SCANNER_API_KEY` - API key for ESP32 scanner (optional, enables authentication)
+- `DISCORD_BOT_API_KEY` - API key for Discord bot (optional, enables authentication)
+- `API_KEYS` - Comma-separated list of additional API keys (optional)
+
+You can set them using a `.env` file and a tool like `direnv` or `dotenv`, or export them in your shell before running the server (e.g., `export SCANNER_API_KEY=yourkey`). The Docker Compose setup automatically loads from `.env`.
+
+**Security Note**: If any API key is configured, all endpoints (except `/health`) require the `X-API-Key` header. See [SECURITY.md](SECURITY.md) for detailed setup instructions.
 
 Copy `.env.example` to `.env` and customize as needed.
 
@@ -186,22 +193,36 @@ curl -X POST http://localhost:8080/import_members
 
 ## Testing
 
-- Unit tests are included; run them with:
+- Unit tests are included, run them with:
 
 ```bash
+# Run all tests
 go test ./...
-```
 
-- Recommended (race detector):
+# Run with verbose output
+go test -v ./...
 
-```bash
+# Run with race detector (recommended)
 go test -race ./...
+
+# Run specific test category
+go test -v -run TestAPIKey  # API key authentication tests
+go test -v -run TestHandle  # Handler tests
 ```
+
+### Test Coverage
+
+- **Handler tests**: All HTTP endpoints (scan, members, history, etc.)
+- **API key authentication**: Middleware validation, multiple keys, environment loading
+- **Integration tests**: End-to-end workflows with authentication
+- **Edge cases**: Invalid input, missing data, error conditions
+
+All tests use in-memory SQLite databases for speed and isolation.
 
 ## Deployment notes
 
 - Keep the `data/` folder mounted on persistent storage when running in containers so the SQLite DB and current attendees are not lost between restarts.
-- The service is intentionally simple (no auth). If you expose it publicly, add authentication (e.g., API key, basic auth, or reverse-proxy with auth) and TLS in front of it.
+- **Security**: Configure API keys for production deployment (see [SECURITY.md](SECURITY.md))
 
 ## Implementation Notes
 

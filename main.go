@@ -83,6 +83,9 @@ var (
 
 	// Mutex to protect our maps/slices from concurrent access
 	mu sync.RWMutex
+
+	// API keys for client authentication
+	validAPIKeys map[string]bool // Map of valid API keys (loaded from env)
 )
 
 // --- Helpers ---
@@ -98,12 +101,44 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		w.Header().Set("Access-Control-Allow-Origin", allowedOrigins)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
 		w.Header().Set("Access-Control-Max-Age", "3600")
 
 		// Handle preflight OPTIONS request
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next(w, r)
+	}
+}
+
+// apiKeyMiddleware validates API key before processing requests
+func apiKeyMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Health check endpoint is always allowed
+		if r.URL.Path == "/health" {
+			next(w, r)
+			return
+		}
+
+		// Get API key from X-API-Key header
+		apiKey := r.Header.Get("X-API-Key")
+
+		// If no API keys configured, allow all requests
+		if len(validAPIKeys) == 0 {
+			next(w, r)
+			return
+		}
+
+		// Validate API key
+		if apiKey == "" || !validAPIKeys[apiKey] {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "missing or invalid API key",
+			})
 			return
 		}
 
@@ -195,6 +230,31 @@ func loadHistoryFromDB() ([]Session, error) {
 		sessions = append(sessions, s)
 	}
 	return sessions, rows.Err()
+}
+
+// loadAPIKeys loads API keys from environment variables and returns a map of valid keys
+func loadAPIKeys() map[string]bool {
+	keys := make(map[string]bool)
+
+	// Load individual API keys for specific clients
+	if scannerKey := os.Getenv("SCANNER_API_KEY"); scannerKey != "" {
+		keys[scannerKey] = true
+	}
+	if botKey := os.Getenv("DISCORD_BOT_API_KEY"); botKey != "" {
+		keys[botKey] = true
+	}
+
+	// Load comma-separated list of API keys from API_KEYS environment variable
+	if apiKeys := os.Getenv("API_KEYS"); apiKeys != "" {
+		for _, key := range strings.Split(apiKeys, ",") {
+			key = strings.TrimSpace(key)
+			if key != "" {
+				keys[key] = true
+			}
+		}
+	}
+
+	return keys
 }
 
 // saveCurrentAttendees saves the current attendees map to a JSON file
@@ -790,19 +850,31 @@ func main() {
 		log.Printf("Loaded %d current attendees from file.", len(currentAttendees))
 	}
 
-	// Define Routes with CORS middleware
-	http.HandleFunc("/scan", corsMiddleware(handleScan))                             // POST: ESP32 sends UID here
-	http.HandleFunc("/current", corsMiddleware(handleCurrent))                       // GET: See who is in the room
-	http.HandleFunc("/history", corsMiddleware(handleHistory))                       // GET: See past logs
-	http.HandleFunc("/scan-history", corsMiddleware(handleScanHistory))              // GET: See recent scan events
-	http.HandleFunc("/members", corsMiddleware(handleMembers))                       // GET: list members, POST: create member
-	http.HandleFunc("/count", corsMiddleware(handleCount))                           // GET: get current attendee count
-	http.HandleFunc("/health", corsMiddleware(handleHealth))                         // GET: health check
-	http.HandleFunc("/sign-out-all", corsMiddleware(handleSignoutAll))               // POST: sign out all attendees
-	http.HandleFunc("/sign-in-discord", corsMiddleware(handleSignInWithDiscordID))   // POST: sign in with Discord ID
-	http.HandleFunc("/sign-out-discord", corsMiddleware(handleSignOutWithDiscordID)) // POST: sign out with Discord ID
-	http.HandleFunc("/export-members", corsMiddleware(handleExportMembers))          // GET: export members as json file
-	http.HandleFunc("/import-members", corsMiddleware(handleImportMembers))          // POST: import members from json file// POST: import members from json file
+	// Load API keys from environment
+	validAPIKeys = loadAPIKeys()
+	if len(validAPIKeys) > 0 {
+		log.Printf("Loaded %d API key(s) for authentication.", len(validAPIKeys))
+	} else {
+		log.Println("Warning: No API keys configured. All endpoints are public. Set SCANNER_API_KEY, DISCORD_BOT_API_KEY, or API_KEYS environment variables for security.")
+	}
+
+	// Define Routes with CORS and API key middleware
+	wrapRoute := func(handler http.HandlerFunc) http.HandlerFunc {
+		return corsMiddleware(apiKeyMiddleware(handler))
+	}
+
+	http.HandleFunc("/scan", wrapRoute(handleScan))                             // POST: ESP32 sends UID here
+	http.HandleFunc("/current", wrapRoute(handleCurrent))                       // GET: See who is in the room
+	http.HandleFunc("/history", wrapRoute(handleHistory))                       // GET: See past logs
+	http.HandleFunc("/scan-history", wrapRoute(handleScanHistory))              // GET: See recent scan events
+	http.HandleFunc("/members", wrapRoute(handleMembers))                       // GET: list members, POST: create member
+	http.HandleFunc("/count", wrapRoute(handleCount))                           // GET: get current attendee count
+	http.HandleFunc("/health", corsMiddleware(handleHealth))                    // GET: health check (no API key needed)
+	http.HandleFunc("/sign-out-all", wrapRoute(handleSignoutAll))               // POST: sign out all attendees
+	http.HandleFunc("/sign-in-discord", wrapRoute(handleSignInWithDiscordID))   // POST: sign in with Discord ID
+	http.HandleFunc("/sign-out-discord", wrapRoute(handleSignOutWithDiscordID)) // POST: sign out with Discord ID
+	http.HandleFunc("/export-members", wrapRoute(handleExportMembers))          // GET: export members as json file
+	http.HandleFunc("/import-members", wrapRoute(handleImportMembers))          // POST: import members from json file
 
 	// Start Nightly Cleanup Goroutine
 	go startNightlyCleanup()

@@ -936,3 +936,355 @@ func TestHandleSignOutWithDiscordID_MethodNotAllowed(t *testing.T) {
 		t.Errorf("expected 405 Method Not Allowed, got %v", rr.Code)
 	}
 }
+
+func TestAPIKeyMiddleware_NoKeysConfigured(t *testing.T) {
+	setupTest()
+
+	// Reset API keys to empty (no authentication required)
+	validAPIKeys = map[string]bool{}
+
+	// Create a test handler
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("success"))
+	})
+
+	// Wrap with middleware
+	wrappedHandler := apiKeyMiddleware(testHandler)
+
+	// Test request without API key - should succeed when no keys configured
+	req, _ := http.NewRequest("GET", "/test", nil)
+	rr := httptest.NewRecorder()
+
+	wrappedHandler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 OK when no keys configured, got %v", rr.Code)
+	}
+	if rr.Body.String() != "success" {
+		t.Errorf("expected 'success' body, got %v", rr.Body.String())
+	}
+}
+
+func TestAPIKeyMiddleware_ValidKey(t *testing.T) {
+	setupTest()
+
+	// Configure API keys
+	validAPIKeys = map[string]bool{
+		"test-key-123": true,
+		"test-key-456": true,
+	}
+
+	// Create a test handler
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("authenticated"))
+	})
+
+	// Wrap with middleware
+	wrappedHandler := apiKeyMiddleware(testHandler)
+
+	// Test request with valid API key
+	req, _ := http.NewRequest("GET", "/test", nil)
+	req.Header.Set("X-API-Key", "test-key-123")
+	rr := httptest.NewRecorder()
+
+	wrappedHandler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 OK with valid key, got %v", rr.Code)
+	}
+	if rr.Body.String() != "authenticated" {
+		t.Errorf("expected 'authenticated' body, got %v", rr.Body.String())
+	}
+}
+
+func TestAPIKeyMiddleware_InvalidKey(t *testing.T) {
+	setupTest()
+
+	// Configure API keys
+	validAPIKeys = map[string]bool{
+		"valid-key": true,
+	}
+
+	// Create a test handler
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("should not reach here"))
+	})
+
+	// Wrap with middleware
+	wrappedHandler := apiKeyMiddleware(testHandler)
+
+	// Test request with invalid API key
+	req, _ := http.NewRequest("GET", "/test", nil)
+	req.Header.Set("X-API-Key", "invalid-key")
+	rr := httptest.NewRecorder()
+
+	wrappedHandler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 Unauthorized with invalid key, got %v", rr.Code)
+	}
+
+	// Check response body
+	var response map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to parse error response: %v", err)
+	}
+	if response["error"] != "missing or invalid API key" {
+		t.Errorf("expected error message about invalid key, got %v", response["error"])
+	}
+}
+
+func TestAPIKeyMiddleware_MissingKey(t *testing.T) {
+	setupTest()
+
+	// Configure API keys
+	validAPIKeys = map[string]bool{
+		"required-key": true,
+	}
+
+	// Create a test handler
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("should not reach here"))
+	})
+
+	// Wrap with middleware
+	wrappedHandler := apiKeyMiddleware(testHandler)
+
+	// Test request without API key header
+	req, _ := http.NewRequest("POST", "/scan", nil)
+	rr := httptest.NewRecorder()
+
+	wrappedHandler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 Unauthorized when key is missing, got %v", rr.Code)
+	}
+
+	// Check response body
+	var response map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to parse error response: %v", err)
+	}
+	if response["error"] != "missing or invalid API key" {
+		t.Errorf("expected error message about missing key, got %v", response["error"])
+	}
+}
+
+func TestAPIKeyMiddleware_HealthEndpointAlwaysAllowed(t *testing.T) {
+	setupTest()
+
+	// Configure API keys
+	validAPIKeys = map[string]bool{
+		"some-key": true,
+	}
+
+	// Create a test handler (simulating health endpoint)
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+
+	// Wrap with middleware
+	wrappedHandler := apiKeyMiddleware(testHandler)
+
+	// Test request to /health without API key - should always succeed
+	req, _ := http.NewRequest("GET", "/health", nil)
+	rr := httptest.NewRecorder()
+
+	wrappedHandler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 OK for /health without key, got %v", rr.Code)
+	}
+	if rr.Body.String() != "OK" {
+		t.Errorf("expected 'OK' body, got %v", rr.Body.String())
+	}
+}
+
+func TestAPIKeyMiddleware_MultipleValidKeys(t *testing.T) {
+	setupTest()
+
+	// Configure multiple API keys
+	validAPIKeys = map[string]bool{
+		"scanner-key": true,
+		"bot-key":     true,
+		"admin-key":   true,
+	}
+
+	// Create a test handler
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("success"))
+	})
+
+	// Wrap with middleware
+	wrappedHandler := apiKeyMiddleware(testHandler)
+
+	// Test each valid key
+	validKeys := []string{"scanner-key", "bot-key", "admin-key"}
+	for _, key := range validKeys {
+		req, _ := http.NewRequest("GET", "/test", nil)
+		req.Header.Set("X-API-Key", key)
+		rr := httptest.NewRecorder()
+
+		wrappedHandler.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("expected 200 OK with key '%s', got %v", key, rr.Code)
+		}
+	}
+}
+
+func TestLoadAPIKeys_FromEnvironment(t *testing.T) {
+	// Save original env vars
+	originalScanner := os.Getenv("SCANNER_API_KEY")
+	originalBot := os.Getenv("DISCORD_BOT_API_KEY")
+	originalKeys := os.Getenv("API_KEYS")
+
+	// Clean up after test
+	defer func() {
+		os.Setenv("SCANNER_API_KEY", originalScanner)
+		os.Setenv("DISCORD_BOT_API_KEY", originalBot)
+		os.Setenv("API_KEYS", originalKeys)
+	}()
+
+	// Test 1: Load from individual env vars
+	os.Setenv("SCANNER_API_KEY", "scanner-123")
+	os.Setenv("DISCORD_BOT_API_KEY", "bot-456")
+	os.Setenv("API_KEYS", "")
+
+	keys := loadAPIKeys()
+
+	if len(keys) != 2 {
+		t.Errorf("expected 2 keys, got %d", len(keys))
+	}
+	if !keys["scanner-123"] {
+		t.Error("expected scanner-123 to be in keys")
+	}
+	if !keys["bot-456"] {
+		t.Error("expected bot-456 to be in keys")
+	}
+
+	// Test 2: Load from comma-separated API_KEYS
+	os.Setenv("SCANNER_API_KEY", "")
+	os.Setenv("DISCORD_BOT_API_KEY", "")
+	os.Setenv("API_KEYS", "key1,key2,key3")
+
+	keys = loadAPIKeys()
+
+	if len(keys) != 3 {
+		t.Errorf("expected 3 keys, got %d", len(keys))
+	}
+	if !keys["key1"] || !keys["key2"] || !keys["key3"] {
+		t.Error("expected all keys from API_KEYS to be loaded")
+	}
+
+	// Test 3: Load from both sources (should combine)
+	os.Setenv("SCANNER_API_KEY", "scanner-key")
+	os.Setenv("DISCORD_BOT_API_KEY", "bot-key")
+	os.Setenv("API_KEYS", "admin-key,monitor-key")
+
+	keys = loadAPIKeys()
+
+	if len(keys) != 4 {
+		t.Errorf("expected 4 keys, got %d", len(keys))
+	}
+	if !keys["scanner-key"] || !keys["bot-key"] || !keys["admin-key"] || !keys["monitor-key"] {
+		t.Error("expected all keys from both sources to be loaded")
+	}
+
+	// Test 4: Handle whitespace in comma-separated list
+	os.Setenv("SCANNER_API_KEY", "")
+	os.Setenv("DISCORD_BOT_API_KEY", "")
+	os.Setenv("API_KEYS", " key1 , key2 , key3 ")
+
+	keys = loadAPIKeys()
+
+	if len(keys) != 3 {
+		t.Errorf("expected 3 keys (whitespace trimmed), got %d", len(keys))
+	}
+	if !keys["key1"] || !keys["key2"] || !keys["key3"] {
+		t.Error("expected whitespace to be trimmed from keys")
+	}
+
+	// Test 5: Empty environment (no keys)
+	os.Setenv("SCANNER_API_KEY", "")
+	os.Setenv("DISCORD_BOT_API_KEY", "")
+	os.Setenv("API_KEYS", "")
+
+	keys = loadAPIKeys()
+
+	if len(keys) != 0 {
+		t.Errorf("expected 0 keys when env is empty, got %d", len(keys))
+	}
+}
+
+func TestIntegration_ScanWithAPIKey(t *testing.T) {
+	setupTest()
+
+	// Configure API key
+	validAPIKeys = map[string]bool{
+		"scanner-key-xyz": true,
+	}
+
+	// Create a scan request
+	payload := []byte(`{"uid":"TEST_UID_1"}`)
+	req, _ := http.NewRequest("POST", "/scan", bytes.NewBuffer(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "scanner-key-xyz")
+	rr := httptest.NewRecorder()
+
+	// Wrap handler with middleware
+	wrappedHandler := apiKeyMiddleware(handleScan)
+	wrappedHandler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 OK, got %v", rr.Code)
+	}
+
+	// Verify scan worked
+	var response map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if response["status"] != "in" {
+		t.Errorf("expected status 'in', got %v", response["status"])
+	}
+}
+
+func TestIntegration_ScanWithoutAPIKeyWhenRequired(t *testing.T) {
+	setupTest()
+
+	// Configure API key (making it required)
+	validAPIKeys = map[string]bool{
+		"required-key": true,
+	}
+
+	// Create a scan request WITHOUT API key
+	payload := []byte(`{"uid":"TEST_UID_1"}`)
+	req, _ := http.NewRequest("POST", "/scan", bytes.NewBuffer(payload))
+	req.Header.Set("Content-Type", "application/json")
+	// Note: No X-API-Key header
+	rr := httptest.NewRecorder()
+
+	// Wrap handler with middleware
+	wrappedHandler := apiKeyMiddleware(handleScan)
+	wrappedHandler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 Unauthorized, got %v", rr.Code)
+	}
+
+	// Verify error response
+	var response map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to parse error response: %v", err)
+	}
+	if response["error"] != "missing or invalid API key" {
+		t.Errorf("expected authentication error, got %v", response["error"])
+	}
+}
