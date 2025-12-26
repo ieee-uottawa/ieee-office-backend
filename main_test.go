@@ -14,6 +14,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// ============================================================================
+// Setup & Test Helpers
+// ============================================================================
+
 // setupTest resets global state for a clean testing environment
 func setupTest() {
 	// Ensure data folder exists for file-based helpers used by handlers
@@ -86,6 +90,10 @@ func setupTest() {
 		panic(err)
 	}
 }
+
+// ============================================================================
+// /scan Endpoint Tests
+// ============================================================================
 
 func TestHandleScan_MethodNotAllowed(t *testing.T) {
 	setupTest()
@@ -188,6 +196,10 @@ func TestHandleScan_UnknownUser(t *testing.T) {
 		t.Errorf("Expected 403 Forbidden for unknown user, got %v", rr.Code)
 	}
 }
+
+// ============================================================================
+// /members Endpoint Tests (List & Create)
+// ============================================================================
 
 func TestHandleMembers_Create(t *testing.T) {
 	setupTest()
@@ -318,6 +330,10 @@ func TestHandleMembers_List(t *testing.T) {
 	}
 }
 
+// ============================================================================
+// /count, /current, /health Endpoint Tests
+// ============================================================================
+
 func TestHandleCount_NoAttendees(t *testing.T) {
 	setupTest()
 
@@ -439,6 +455,10 @@ func TestHandleHealth(t *testing.T) {
 		t.Errorf("expected body %q, got %q", expected, rr.Body.String())
 	}
 }
+
+// ============================================================================
+// /visits Endpoint Tests (GET - Retrieval with Filters)
+// ============================================================================
 
 func TestHandleVisits_Empty(t *testing.T) {
 	setupTest()
@@ -762,6 +782,10 @@ func TestHandleVisits_NegativeLimit(t *testing.T) {
 	}
 }
 
+// ============================================================================
+// /visits Endpoint Tests (DELETE - Removal with Filters)
+// ============================================================================
+
 func TestHandleDeleteVisits_WithFromFilter(t *testing.T) {
 	setupTest()
 
@@ -1020,6 +1044,10 @@ func TestHandleDeleteVisits_NoVisitsInRange(t *testing.T) {
 	}
 }
 
+// ============================================================================
+// /scan-history Endpoint Tests
+// ============================================================================
+
 func TestHandleScanHistory_Empty(t *testing.T) {
 	setupTest()
 
@@ -1118,6 +1146,10 @@ func TestHandleScanHistory_TrimsToTen(t *testing.T) {
 	}
 }
 
+// ============================================================================
+// /sign-out-all Endpoint Tests
+// ============================================================================
+
 func TestHandleSignoutAll_NoAttendees(t *testing.T) {
 	setupTest()
 
@@ -1189,6 +1221,10 @@ func TestHandleSignoutAll_MethodNotAllowed(t *testing.T) {
 		t.Errorf("expected 405 Method Not Allowed, got %v", rr.Code)
 	}
 }
+
+// ============================================================================
+// /export-members & /import-members Endpoint Tests
+// ============================================================================
 
 func TestHandleExportMembers_Success(t *testing.T) {
 	setupTest()
@@ -1273,6 +1309,10 @@ func TestHandleImportMembers_MethodNotAllowed(t *testing.T) {
 		t.Fatalf("expected 405 Method Not Allowed, got %v", rr.Code)
 	}
 }
+
+// ============================================================================
+// /sign-in-discord & /sign-out-discord Endpoint Tests
+// ============================================================================
 
 func TestHandleSignInWithDiscordID_Success(t *testing.T) {
 	setupTest()
@@ -1453,6 +1493,10 @@ func TestHandleSignOutWithDiscordID_MethodNotAllowed(t *testing.T) {
 		t.Errorf("expected 405 Method Not Allowed, got %v", rr.Code)
 	}
 }
+
+// ============================================================================
+// API Key Middleware Tests
+// ============================================================================
 
 func TestAPIKeyMiddleware_NoKeysConfigured(t *testing.T) {
 	setupTest()
@@ -1740,6 +1784,10 @@ func TestLoadAPIKeys_FromEnvironment(t *testing.T) {
 	}
 }
 
+// ============================================================================
+// Integration Tests
+// ============================================================================
+
 func TestIntegration_ScanWithAPIKey(t *testing.T) {
 	setupTest()
 
@@ -1805,6 +1853,10 @@ func TestIntegration_ScanWithoutAPIKeyWhenRequired(t *testing.T) {
 		t.Errorf("expected authentication error, got %v", response["error"])
 	}
 }
+
+// ============================================================================
+// /members/{id} Endpoint Tests (PUT - Update, DELETE - Remove)
+// ============================================================================
 
 func TestHandleMember_UpdateSuccess(t *testing.T) {
 	setupTest()
