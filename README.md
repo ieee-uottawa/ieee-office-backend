@@ -152,6 +152,14 @@ curl -X PUT http://localhost:8080/members/1 -H 'Content-Type: application/json' 
 
 Returns the updated member on success, `404` if member not found, or `409` if the UID conflicts with another member.
 
+- `DELETE /members/{id}` — delete an existing member by ID.
+
+```bash
+curl -X DELETE http://localhost:8080/members/1
+```
+
+Returns a success message on deletion, `404` if member not found, or `409` if the member is currently signed in. Note: Deleting a member will cascade delete all associated session history.
+
 - `GET /count` — returns the count of currently signed-in attendees.
 
 ```bash

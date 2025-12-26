@@ -518,9 +518,9 @@ func handleScanHistory(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(history)
 }
 
-// handleMember handles updating a single member by ID (PUT)
+// handleMember handles updating or deleting a single member by ID (PUT/DELETE)
 func handleMember(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut {
+	if r.Method != http.MethodPut && r.Method != http.MethodDelete {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -536,6 +536,55 @@ func handleMember(w http.ResponseWriter, r *http.Request) {
 	var id int64
 	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
 		http.Error(w, "Invalid member ID", http.StatusBadRequest)
+		return
+	}
+
+	// Handle DELETE request
+	if r.Method == http.MethodDelete {
+		// Check if member exists and get UID before deletion
+		var uid string
+		err := db.QueryRow(`SELECT uid FROM members WHERE id = ?`, id).Scan(&uid)
+		if err == sql.ErrNoRows {
+			http.Error(w, "Member not found", http.StatusNotFound)
+			return
+		} else if err != nil {
+			log.Printf("Error querying member: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		// Check if member is currently signed in
+		mu.RLock()
+		_, isSignedIn := currentAttendees[uid]
+		mu.RUnlock()
+
+		if isSignedIn {
+			http.Error(w, "Cannot delete member who is currently signed in", http.StatusConflict)
+			return
+		}
+
+		// Delete from database (CASCADE will delete related sessions)
+		result, err := db.Exec(`DELETE FROM members WHERE id = ?`, id)
+		if err != nil {
+			log.Printf("Error deleting member: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		rowsAffected, _ := result.RowsAffected()
+		if rowsAffected == 0 {
+			http.Error(w, "Member not found", http.StatusNotFound)
+			return
+		}
+
+		// Reload cache to reflect deletion
+		if err := loadMembersIntoCache(); err != nil {
+			log.Printf("Warning: Failed to reload members cache: %v", err)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"message": "Member deleted successfully"})
 		return
 	}
 

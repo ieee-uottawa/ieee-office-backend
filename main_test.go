@@ -1473,3 +1473,150 @@ func TestHandleMember_UpdateWithWhitespace(t *testing.T) {
 		t.Fatalf("whitespace not trimmed in DB: name=%q uid=%q discord_id=%q", name, uid, discordID)
 	}
 }
+
+func TestHandleMember_DeleteSuccess(t *testing.T) {
+	setupTest()
+
+	// Delete Alice (who is not signed in)
+	req, _ := http.NewRequest("DELETE", "/members/1", nil)
+	rr := httptest.NewRecorder()
+
+	handleMember(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200 OK, got %v; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response JSON: %v", err)
+	}
+	if resp["message"] != "Member deleted successfully" {
+		t.Fatalf("unexpected message: %v", resp["message"])
+	}
+
+	// Verify member is deleted from DB
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM members WHERE id = ?`, 1).Scan(&count)
+	if err != nil {
+		t.Fatalf("error querying DB: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected member to be deleted, but still exists")
+	}
+
+	// Verify cache was updated
+	mu.RLock()
+	_, exists := userDB["TEST_UID_1"]
+	mu.RUnlock()
+	if exists {
+		t.Fatalf("member should be removed from cache")
+	}
+}
+
+func TestHandleMember_DeleteNotFound(t *testing.T) {
+	setupTest()
+
+	// Try to delete non-existent member
+	req, _ := http.NewRequest("DELETE", "/members/999", nil)
+	rr := httptest.NewRecorder()
+
+	handleMember(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404 Not Found, got %v", rr.Code)
+	}
+}
+
+func TestHandleMember_DeleteSignedInMember(t *testing.T) {
+	setupTest()
+
+	// Sign in Alice
+	currentAttendees["TEST_UID_1"] = time.Now()
+
+	// Try to delete Alice while she's signed in
+	req, _ := http.NewRequest("DELETE", "/members/1", nil)
+	rr := httptest.NewRecorder()
+
+	handleMember(rr, req)
+
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected status 409 Conflict, got %v", rr.Code)
+	}
+
+	// Verify member still exists
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM members WHERE id = ?`, 1).Scan(&count)
+	if err != nil {
+		t.Fatalf("error querying DB: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected member to still exist")
+	}
+}
+
+func TestHandleMember_DeleteInvalidID(t *testing.T) {
+	setupTest()
+
+	req, _ := http.NewRequest("DELETE", "/members/abc", nil)
+	rr := httptest.NewRecorder()
+
+	handleMember(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for invalid ID, got %v", rr.Code)
+	}
+}
+
+func TestHandleMember_DeleteNoID(t *testing.T) {
+	setupTest()
+
+	req, _ := http.NewRequest("DELETE", "/members/", nil)
+	rr := httptest.NewRecorder()
+
+	handleMember(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for missing ID, got %v", rr.Code)
+	}
+}
+
+func TestHandleMember_DeleteCascadesSessions(t *testing.T) {
+	setupTest()
+
+	// Add some sessions for Alice
+	now := time.Now()
+	_, err := db.Exec(`INSERT INTO sessions (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+		1, now.Add(-2*time.Hour).Format(time.RFC3339), now.Add(-1*time.Hour).Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("failed inserting session: %v", err)
+	}
+
+	// Verify session exists
+	var sessionCount int
+	err = db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE member_id = ?`, 1).Scan(&sessionCount)
+	if err != nil {
+		t.Fatalf("error querying sessions: %v", err)
+	}
+	if sessionCount != 1 {
+		t.Fatalf("expected 1 session, got %d", sessionCount)
+	}
+
+	// Delete Alice
+	req, _ := http.NewRequest("DELETE", "/members/1", nil)
+	rr := httptest.NewRecorder()
+	handleMember(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200 OK, got %v; body=%s", rr.Code, rr.Body.String())
+	}
+
+	// Verify sessions were cascaded deleted
+	err = db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE member_id = ?`, 1).Scan(&sessionCount)
+	if err != nil {
+		t.Fatalf("error querying sessions: %v", err)
+	}
+	if sessionCount != 0 {
+		t.Fatalf("expected 0 sessions after cascade delete, got %d", sessionCount)
+	}
+}
