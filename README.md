@@ -124,10 +124,26 @@ curl http://localhost:8080/scan_history
 curl http://localhost:8080/current
 ```
 
-- `GET /history` — returns historical sessions (name, signin_time, signout_time).
+- `GET /history` — returns historical sessions (name, signin_time, signout_time). Supports optional query parameters for filtering:
+  - `from` - RFC3339 formatted start date (inclusive) to filter sessions from this date onwards
+  - `to` - RFC3339 formatted end date (inclusive) to filter sessions up to this date
+  - `limit` - maximum number of records to return (newest first)
 
 ```bash
+# Get all history
 curl http://localhost:8080/history
+
+# Get history from a specific date
+curl "http://localhost:8080/history?from=2024-01-01T00:00:00Z"
+
+# Get history within a date range
+curl "http://localhost:8080/history?from=2024-01-01T00:00:00Z&to=2024-12-31T23:59:59Z"
+
+# Get the 10 most recent sessions
+curl "http://localhost:8080/history?limit=10"
+
+# Combine filters: get 50 most recent sessions from January 2024
+curl "http://localhost:8080/history?from=2024-01-01T00:00:00Z&to=2024-01-31T23:59:59Z&limit=50"
 ```
 
 - `GET /members` — returns registered members stored in the DB.

@@ -503,6 +503,265 @@ func TestHandleHistory_WithSessions(t *testing.T) {
 	}
 }
 
+func TestHandleHistory_WithFromFilter(t *testing.T) {
+	setupTest()
+
+	// Insert 3 sessions at different times
+	baseTime := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
+	_, err := db.Exec(`INSERT INTO sessions (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+		1, baseTime.Add(-2*time.Hour).Format(time.RFC3339), baseTime.Add(-1*time.Hour).Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("failed inserting session: %v", err)
+	}
+	_, err = db.Exec(`INSERT INTO sessions (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+		2, baseTime.Format(time.RFC3339), baseTime.Add(1*time.Hour).Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("failed inserting session: %v", err)
+	}
+	_, err = db.Exec(`INSERT INTO sessions (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+		1, baseTime.Add(2*time.Hour).Format(time.RFC3339), baseTime.Add(3*time.Hour).Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("failed inserting session: %v", err)
+	}
+
+	// Filter to get only sessions from baseTime onwards
+	req, _ := http.NewRequest("GET", "/history?from="+baseTime.Format(time.RFC3339), nil)
+	rr := httptest.NewRecorder()
+
+	handleHistory(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %v", rr.Code)
+	}
+
+	var sessions []Session
+	if err := json.Unmarshal(rr.Body.Bytes(), &sessions); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("expected 2 sessions with from filter, got %d", len(sessions))
+	}
+}
+
+func TestHandleHistory_WithToFilter(t *testing.T) {
+	setupTest()
+
+	// Insert 3 sessions at different times
+	baseTime := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
+	_, err := db.Exec(`INSERT INTO sessions (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+		1, baseTime.Add(-2*time.Hour).Format(time.RFC3339), baseTime.Add(-1*time.Hour).Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("failed inserting session: %v", err)
+	}
+	_, err = db.Exec(`INSERT INTO sessions (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+		2, baseTime.Format(time.RFC3339), baseTime.Add(1*time.Hour).Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("failed inserting session: %v", err)
+	}
+	_, err = db.Exec(`INSERT INTO sessions (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+		1, baseTime.Add(2*time.Hour).Format(time.RFC3339), baseTime.Add(3*time.Hour).Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("failed inserting session: %v", err)
+	}
+
+	// Filter to get only sessions up to baseTime
+	req, _ := http.NewRequest("GET", "/history?to="+baseTime.Format(time.RFC3339), nil)
+	rr := httptest.NewRecorder()
+
+	handleHistory(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %v", rr.Code)
+	}
+
+	var sessions []Session
+	if err := json.Unmarshal(rr.Body.Bytes(), &sessions); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("expected 2 sessions with to filter, got %d", len(sessions))
+	}
+}
+
+func TestHandleHistory_WithFromAndToFilter(t *testing.T) {
+	setupTest()
+
+	// Insert 5 sessions at different times
+	baseTime := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
+	sessions := []struct {
+		memberID int
+		offset   time.Duration
+	}{
+		{1, -4 * time.Hour},
+		{2, -2 * time.Hour},
+		{1, 0},
+		{2, 2 * time.Hour},
+		{1, 4 * time.Hour},
+	}
+
+	for _, s := range sessions {
+		signinTime := baseTime.Add(s.offset)
+		signoutTime := signinTime.Add(30 * time.Minute)
+		_, err := db.Exec(`INSERT INTO sessions (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+			s.memberID, signinTime.Format(time.RFC3339), signoutTime.Format(time.RFC3339))
+		if err != nil {
+			t.Fatalf("failed inserting session: %v", err)
+		}
+	}
+
+	// Filter to get only sessions between -2 hours and +2 hours
+	from := baseTime.Add(-2 * time.Hour).Format(time.RFC3339)
+	to := baseTime.Add(2 * time.Hour).Format(time.RFC3339)
+	req, _ := http.NewRequest("GET", "/history?from="+from+"&to="+to, nil)
+	rr := httptest.NewRecorder()
+
+	handleHistory(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %v", rr.Code)
+	}
+
+	var result []Session
+	if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if len(result) != 3 {
+		t.Fatalf("expected 3 sessions with from and to filter, got %d", len(result))
+	}
+}
+
+func TestHandleHistory_WithLimit(t *testing.T) {
+	setupTest()
+
+	// Insert 5 sessions
+	baseTime := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		signinTime := baseTime.Add(time.Duration(i) * time.Hour)
+		signoutTime := signinTime.Add(30 * time.Minute)
+		memberID := (i % 2) + 1 // Alternate between member 1 and 2
+		_, err := db.Exec(`INSERT INTO sessions (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+			memberID, signinTime.Format(time.RFC3339), signoutTime.Format(time.RFC3339))
+		if err != nil {
+			t.Fatalf("failed inserting session: %v", err)
+		}
+	}
+
+	// Request only 3 most recent sessions
+	req, _ := http.NewRequest("GET", "/history?limit=3", nil)
+	rr := httptest.NewRecorder()
+
+	handleHistory(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %v", rr.Code)
+	}
+
+	var sessions []Session
+	if err := json.Unmarshal(rr.Body.Bytes(), &sessions); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if len(sessions) != 3 {
+		t.Fatalf("expected 3 sessions with limit, got %d", len(sessions))
+	}
+
+	// Verify they are the newest (should be in descending order)
+	for i := 0; i < len(sessions)-1; i++ {
+		if sessions[i].SignInTime.Before(sessions[i+1].SignInTime) {
+			t.Fatalf("sessions not in descending order")
+		}
+	}
+}
+
+func TestHandleHistory_WithAllFilters(t *testing.T) {
+	setupTest()
+
+	// Insert 10 sessions
+	baseTime := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 10; i++ {
+		signinTime := baseTime.Add(time.Duration(i) * time.Hour)
+		signoutTime := signinTime.Add(30 * time.Minute)
+		memberID := (i % 2) + 1
+		_, err := db.Exec(`INSERT INTO sessions (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+			memberID, signinTime.Format(time.RFC3339), signoutTime.Format(time.RFC3339))
+		if err != nil {
+			t.Fatalf("failed inserting session: %v", err)
+		}
+	}
+
+	// Request with from, to, and limit
+	from := baseTime.Add(2 * time.Hour).Format(time.RFC3339)
+	to := baseTime.Add(8 * time.Hour).Format(time.RFC3339)
+	req, _ := http.NewRequest("GET", "/history?from="+from+"&to="+to+"&limit=3", nil)
+	rr := httptest.NewRecorder()
+
+	handleHistory(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %v", rr.Code)
+	}
+
+	var sessions []Session
+	if err := json.Unmarshal(rr.Body.Bytes(), &sessions); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	// Should have 7 sessions in range (hours 2-8 inclusive), but limited to 3
+	if len(sessions) != 3 {
+		t.Fatalf("expected 3 sessions with all filters, got %d", len(sessions))
+	}
+}
+
+func TestHandleHistory_InvalidFromDate(t *testing.T) {
+	setupTest()
+
+	req, _ := http.NewRequest("GET", "/history?from=invalid-date", nil)
+	rr := httptest.NewRecorder()
+
+	handleHistory(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for invalid from date, got %v", rr.Code)
+	}
+}
+
+func TestHandleHistory_InvalidToDate(t *testing.T) {
+	setupTest()
+
+	req, _ := http.NewRequest("GET", "/history?to=invalid-date", nil)
+	rr := httptest.NewRecorder()
+
+	handleHistory(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for invalid to date, got %v", rr.Code)
+	}
+}
+
+func TestHandleHistory_InvalidLimit(t *testing.T) {
+	setupTest()
+
+	req, _ := http.NewRequest("GET", "/history?limit=abc", nil)
+	rr := httptest.NewRecorder()
+
+	handleHistory(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for invalid limit, got %v", rr.Code)
+	}
+}
+
+func TestHandleHistory_NegativeLimit(t *testing.T) {
+	setupTest()
+
+	req, _ := http.NewRequest("GET", "/history?limit=-5", nil)
+	rr := httptest.NewRecorder()
+
+	handleHistory(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for negative limit, got %v", rr.Code)
+	}
+}
+
 func TestHandleScanHistory_Empty(t *testing.T) {
 	setupTest()
 

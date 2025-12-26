@@ -199,13 +199,42 @@ func saveSessionToDB(memberID int64, signin time.Time, signout time.Time) error 
 	return err
 }
 
-// loadHistoryFromDB retrieves all sessions from the database
-func loadHistoryFromDB() ([]Session, error) {
-	rows, err := db.Query(`
+// loadHistoryFromDB retrieves sessions from the database with optional filtering
+// from: RFC3339 formatted start date (inclusive)
+// to: RFC3339 formatted end date (inclusive)
+// limit: maximum number of records to return (0 means no limit)
+func loadHistoryFromDB(from, to string, limit int) ([]Session, error) {
+	query := `
 		SELECT m.name, s.signin_time, s.signout_time
 		FROM sessions s
-		JOIN members m ON m.id = s.member_id
-		ORDER BY s.signin_time DESC`)
+		JOIN members m ON m.id = s.member_id`
+
+	var conditions []string
+	var args []interface{}
+
+	// Add date range filters if provided
+	if from != "" {
+		conditions = append(conditions, "s.signin_time >= ?")
+		args = append(args, from)
+	}
+	if to != "" {
+		conditions = append(conditions, "s.signin_time <= ?")
+		args = append(args, to)
+	}
+
+	// Build WHERE clause if we have conditions
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	query += " ORDER BY s.signin_time DESC"
+
+	// Add limit if specified
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -484,9 +513,51 @@ func handleCurrent(w http.ResponseWriter, r *http.Request) {
 // /history endpoint
 // Returns historical session data
 
-// handleHistory returns the list of completed sessions
+// handleHistory returns the list of completed sessions with optional filtering
+// Query parameters:
+//   - from: RFC3339 formatted start date (e.g., 2024-01-01T00:00:00Z)
+//   - to: RFC3339 formatted end date (e.g., 2024-12-31T23:59:59Z)
+//   - limit: maximum number of records to return (e.g., 100)
 func handleHistory(w http.ResponseWriter, r *http.Request) {
-	sessions, err := loadHistoryFromDB()
+	// Parse query parameters
+	queryParams := r.URL.Query()
+	from := queryParams.Get("from")
+	to := queryParams.Get("to")
+	limitStr := queryParams.Get("limit")
+
+	// Validate from date if provided
+	if from != "" {
+		if _, err := time.Parse(time.RFC3339, from); err != nil {
+			http.Error(w, "Invalid 'from' date format, expected RFC3339", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Validate to date if provided
+	if to != "" {
+		if _, err := time.Parse(time.RFC3339, to); err != nil {
+			http.Error(w, "Invalid 'to' date format, expected RFC3339", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Parse limit if provided
+	var limit int
+	if limitStr != "" {
+		var err error
+		limit, err = fmt.Sscanf(limitStr, "%d", &limit)
+		if err != nil || limit < 0 {
+			http.Error(w, "Invalid 'limit' parameter, expected positive integer", http.StatusBadRequest)
+			return
+		}
+		// Reassign limit properly from Sscanf result
+		if n, err := fmt.Sscanf(limitStr, "%d", &limit); err != nil || n != 1 || limit < 0 {
+			http.Error(w, "Invalid 'limit' parameter, expected positive integer", http.StatusBadRequest)
+			return
+		}
+	}
+
+	sessions, err := loadHistoryFromDB(from, to, limit)
 	if err != nil {
 		log.Printf("Error loading history from database: %v", err)
 		http.Error(w, "Error loading history", http.StatusInternalServerError)
