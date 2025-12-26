@@ -278,9 +278,3 @@ All tests use in-memory SQLite databases for speed and isolation.
 
 - Concurrency: shared in-memory maps are protected by an `RWMutex`. File I/O and DB operations are performed outside of locks where possible to avoid blocking.
 - Nightly cleanup at 4:00 AM clears active attendees. Sign out times are set to 4:00 AM for those visits.
-
-## Extending / Next steps
-
-- Add authentication for management endpoints.
-- Add pagination/filters for `/visits`.
-- Add metrics for monitoring.
