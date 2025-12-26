@@ -4,77 +4,106 @@
 @host = http://localhost:8080
 @json = application/json
 @uid = 04:A3:B2:11
+@discord_id = 111111111
 @api-key = MY_SECRET_API_KEY
+@from = 2024-01-01T00:00:00Z
+@to = 2024-12-31T23:59:59Z
 
-### Health check
+# ============================================
+# SMOKE TEST: Run these in order for quick sanity check
+# ============================================
+# 1. Health → 2. Members → 3. Current → 4. Count → 5. Visits
+
+### Health check (no API key required)
 GET {{host}}/health
 Accept: {{json}}
 
-### Get current attendees
+### Current attendees
 GET {{host}}/current
 Accept: {{json}}
-Headers:
-  x-api-key: {{api-key}}
+X-API-Key: {{api-key}}
 
-### Get attendee count
+### Current attendee count
 GET {{host}}/count
 Accept: {{json}}
-Headers:
-  x-api-key: {{api-key}}
+X-API-Key: {{api-key}}
 
-### Get scan history (last 10 scans)
+### Scan history (last 10 scans)
 GET {{host}}/scan-history
 Accept: {{json}}
-Headers:
-  x-api-key: {{api-key}}
+X-API-Key: {{api-key}}
 
-### Get visits (attendance history)
+### Visits — get all (newest first)
 GET {{host}}/visits
 Accept: {{json}}
-Headers:
-  x-api-key: {{api-key}}
+X-API-Key: {{api-key}}
+
+### Visits — filter by from
+GET {{host}}/visits?from={{from}}
+Accept: {{json}}
+X-API-Key: {{api-key}}
+
+### Visits — filter by to
+GET {{host}}/visits?to={{to}}
+Accept: {{json}}
+X-API-Key: {{api-key}}
+
+### Visits — filter by range and limit (newest first)
+GET {{host}}/visits?from={{from}}&to={{to}}&limit=10
+Accept: {{json}}
+X-API-Key: {{api-key}}
+
+### Visits — delete by from (requires from or to)
+DELETE {{host}}/visits?from={{from}}
+Accept: {{json}}
+X-API-Key: {{api-key}}
+
+### Visits — delete by to (requires from or to)
+DELETE {{host}}/visits?to={{to}}
+Accept: {{json}}
+X-API-Key: {{api-key}}
 
 ### Scan: sign in/out with UID
 POST {{host}}/scan
 Content-Type: {{json}}
-Headers:
-  x-api-key: {{api-key}}
+X-API-Key: {{api-key}}
 
 {
   "uid": "{{uid}}"
 }
 
-### Sign out all attendees
-POST {{host}}/sign-out-all
-Content-Type: {{json}}
-Headers:
-  x-api-key: {{api-key}}
-
 ### Sign in with Discord ID
 POST {{host}}/sign-in-discord
 Content-Type: {{json}}
-Headers:
-  x-api-key: {{api-key}}
+X-API-Key: {{api-key}}
 
 {
-  "discord_id": "111111111"
+  "discord_id": "{{discord_id}}"
 }
 
 ### Sign out with Discord ID
 POST {{host}}/sign-out-discord
 Content-Type: {{json}}
-Headers:
-  x-api-key: {{api-key}}
+X-API-Key: {{api-key}}
 
 {
-  "discord_id": "111111111"
+  "discord_id": "{{discord_id}}"
 }
 
-### Create a new member
+### Sign out all attendees
+POST {{host}}/sign-out-all
+Content-Type: {{json}}
+X-API-Key: {{api-key}}
+
+### Members — list
+GET {{host}}/members
+Accept: {{json}}
+X-API-Key: {{api-key}}
+
+### Members — create
 POST {{host}}/members
 Content-Type: {{json}}
-Headers:
-  x-api-key
+X-API-Key: {{api-key}}
 
 {
   "name": "Charlie",
@@ -82,20 +111,28 @@ Headers:
   "discord_id": "333333333"
 }
 
-### List members
-GET {{host}}/members
+### Members — update by ID
+PUT {{host}}/members/1
+Content-Type: {{json}}
+X-API-Key: {{api-key}}
+
+{
+  "name": "Charlie Updated",
+  "uid": "04:AA:BB:CC:DD",
+  "discord_id": "333333333"
+}
+
+### Members — delete by ID
+DELETE {{host}}/members/1
 Accept: {{json}}
-Headers:
-  x-api-key: {{api-key}}
+X-API-Key: {{api-key}}
 
 ### Export members to JSON file
 GET {{host}}/export-members
 Accept: {{json}}
-Headers:
-  x-api-key: {{api-key}}
+X-API-Key: {{api-key}}
 
 ### Import members from JSON file
 POST {{host}}/import-members
 Content-Type: {{json}}
-Headers:
-  x-api-key: {{api-key}}
+X-API-Key: {{api-key}}
