@@ -32,8 +32,8 @@ type ScanRequest struct {
 	UID string `json:"uid"`
 }
 
-// Session represents a completed visit (Signin + Signout)
-type Session struct {
+// Visit represents a completed visit (Signin + Signout)
+type Visit struct {
 	Name        string    `json:"name"`
 	SignInTime  time.Time `json:"signin_time"`
 	SignOutTime time.Time `json:"signout_time"`
@@ -146,7 +146,7 @@ func apiKeyMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// initDB initializes the SQLite database and creates the members and sessions tables
+// initDB initializes the SQLite database and creates the members and visits tables
 func initDB() error {
 	var err error
 	db, err = sql.Open("sqlite", databaseFilePath)
@@ -179,8 +179,8 @@ func initDB() error {
 		return err
 	}
 
-	// Create sessions table referencing members
-	createSessionsSQL := `CREATE TABLE IF NOT EXISTS sessions (
+	// Create visits table referencing members
+	createVisitsSQL := `CREATE TABLE IF NOT EXISTS visits (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		member_id INTEGER NOT NULL,
 		signin_time TEXT NOT NULL,
@@ -188,37 +188,40 @@ func initDB() error {
 		FOREIGN KEY(member_id) REFERENCES members(id) ON DELETE CASCADE
 	);`
 
-	_, err = db.Exec(createSessionsSQL)
-	return err
+	if _, err = db.Exec(createVisitsSQL); err != nil {
+		return err
+	}
+
+	return nil
 }
 
-// saveSessionToDB saves a completed session to the database using member_id
-func saveSessionToDB(memberID int64, signin time.Time, signout time.Time) error {
-	insertSQL := `INSERT INTO sessions (member_id, signin_time, signout_time) VALUES (?, ?, ?)`
+// saveVisitToDB saves a completed visit to the database using member_id
+func saveVisitToDB(memberID int64, signin time.Time, signout time.Time) error {
+	insertSQL := `INSERT INTO visits (member_id, signin_time, signout_time) VALUES (?, ?, ?)`
 	_, err := db.Exec(insertSQL, memberID, signin.Format(time.RFC3339), signout.Format(time.RFC3339))
 	return err
 }
 
-// loadHistoryFromDB retrieves sessions from the database with optional filtering
+// loadVisitsFromDB retrieves visits from the database with optional filtering
 // from: RFC3339 formatted start date (inclusive)
 // to: RFC3339 formatted end date (inclusive)
 // limit: maximum number of records to return (0 means no limit)
-func loadHistoryFromDB(from, to string, limit int) ([]Session, error) {
+func loadVisitsFromDB(from, to string, limit int) ([]Visit, error) {
 	query := `
-		SELECT m.name, s.signin_time, s.signout_time
-		FROM sessions s
-		JOIN members m ON m.id = s.member_id`
+		SELECT m.name, v.signin_time, v.signout_time
+		FROM visits v
+		JOIN members m ON m.id = v.member_id`
 
 	var conditions []string
 	var args []interface{}
 
 	// Add date range filters if provided
 	if from != "" {
-		conditions = append(conditions, "s.signin_time >= ?")
+		conditions = append(conditions, "v.signin_time >= ?")
 		args = append(args, from)
 	}
 	if to != "" {
-		conditions = append(conditions, "s.signin_time <= ?")
+		conditions = append(conditions, "v.signin_time <= ?")
 		args = append(args, to)
 	}
 
@@ -227,7 +230,7 @@ func loadHistoryFromDB(from, to string, limit int) ([]Session, error) {
 		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
 
-	query += " ORDER BY s.signin_time DESC"
+	query += " ORDER BY v.signin_time DESC"
 
 	// Add limit if specified
 	if limit > 0 {
@@ -240,9 +243,9 @@ func loadHistoryFromDB(from, to string, limit int) ([]Session, error) {
 	}
 	defer rows.Close()
 
-	var sessions []Session
+	var visits []Visit
 	for rows.Next() {
-		var s Session
+		var s Visit
 		var signinTime, signoutTime string
 		err := rows.Scan(&s.Name, &signinTime, &signoutTime)
 		if err != nil {
@@ -256,9 +259,9 @@ func loadHistoryFromDB(from, to string, limit int) ([]Session, error) {
 		if err != nil {
 			return nil, err
 		}
-		sessions = append(sessions, s)
+		visits = append(visits, s)
 	}
-	return sessions, rows.Err()
+	return visits, rows.Err()
 }
 
 // loadAPIKeys loads API keys from environment variables and returns a map of valid keys
@@ -386,7 +389,7 @@ func performSignOut(member Member, signInTime time.Time) (string, error) {
 	mu.Unlock()
 
 	signOutTime := time.Now()
-	if err := saveSessionToDB(member.ID, signInTime, signOutTime); err != nil {
+	if err := saveVisitToDB(member.ID, signInTime, signOutTime); err != nil {
 		return "", err
 	}
 
@@ -422,7 +425,7 @@ func startNightlyCleanup() {
 			mu.Unlock()
 
 			for uid, signin := range toSignOut {
-				saveSessionToDB(userDB[uid].ID, signin, time.Now())
+				saveVisitToDB(userDB[uid].ID, signin, time.Now())
 			}
 		}
 	}
@@ -510,20 +513,23 @@ func handleCurrent(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(activeList)
 }
 
-// /history endpoint
-// Returns historical session data
+// /visits endpoint
+// Returns or deletes visit data
 
-// handleHistory returns the list of completed sessions with optional filtering
-// Query parameters:
+// handleVisits handles both GET (retrieve) and DELETE (remove) operations for visits
+// Query parameters for GET:
 //   - from: RFC3339 formatted start date (e.g., 2024-01-01T00:00:00Z)
 //   - to: RFC3339 formatted end date (e.g., 2024-12-31T23:59:59Z)
 //   - limit: maximum number of records to return (e.g., 100)
-func handleHistory(w http.ResponseWriter, r *http.Request) {
+//
+// Query parameters for DELETE:
+//   - from: RFC3339 formatted start date (e.g., 2024-01-01T00:00:00Z)
+//   - to: RFC3339 formatted end date (e.g., 2024-12-31T23:59:59Z)
+func handleVisits(w http.ResponseWriter, r *http.Request) {
 	// Parse query parameters
 	queryParams := r.URL.Query()
 	from := queryParams.Get("from")
 	to := queryParams.Get("to")
-	limitStr := queryParams.Get("limit")
 
 	// Validate from date if provided
 	if from != "" {
@@ -541,31 +547,72 @@ func handleHistory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Parse limit if provided
-	var limit int
-	if limitStr != "" {
-		var err error
-		limit, err = fmt.Sscanf(limitStr, "%d", &limit)
-		if err != nil || limit < 0 {
-			http.Error(w, "Invalid 'limit' parameter, expected positive integer", http.StatusBadRequest)
+	switch r.Method {
+	case http.MethodGet:
+		limitStr := queryParams.Get("limit")
+		var limit int
+		if limitStr != "" {
+			if n, err := fmt.Sscanf(limitStr, "%d", &limit); err != nil || n != 1 || limit < 0 {
+				http.Error(w, "Invalid 'limit' parameter, expected positive integer", http.StatusBadRequest)
+				return
+			}
+		}
+
+		visits, err := loadVisitsFromDB(from, to, limit)
+		if err != nil {
+			log.Printf("Error loading visits from database: %v", err)
+			http.Error(w, "Error loading visits", http.StatusInternalServerError)
 			return
 		}
-		// Reassign limit properly from Sscanf result
-		if n, err := fmt.Sscanf(limitStr, "%d", &limit); err != nil || n != 1 || limit < 0 {
-			http.Error(w, "Invalid 'limit' parameter, expected positive integer", http.StatusBadRequest)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(visits)
+
+	case http.MethodDelete:
+		// Require at least one filter to prevent accidental deletion of all visits
+		if from == "" && to == "" {
+			http.Error(w, "At least one filter (from or to) is required to delete visits", http.StatusBadRequest)
 			return
 		}
-	}
 
-	sessions, err := loadHistoryFromDB(from, to, limit)
-	if err != nil {
-		log.Printf("Error loading history from database: %v", err)
-		http.Error(w, "Error loading history", http.StatusInternalServerError)
-		return
-	}
+		// Build DELETE query with conditions
+		query := "DELETE FROM visits"
+		var conditions []string
+		var args []interface{}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(sessions)
+		if from != "" {
+			conditions = append(conditions, "signin_time >= ?")
+			args = append(args, from)
+		}
+		if to != "" {
+			conditions = append(conditions, "signin_time <= ?")
+			args = append(args, to)
+		}
+
+		if len(conditions) > 0 {
+			query += " WHERE " + strings.Join(conditions, " AND ")
+		}
+
+		// Execute deletion
+		result, err := db.Exec(query, args...)
+		if err != nil {
+			log.Printf("Error deleting visits: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		rowsAffected, _ := result.RowsAffected()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"message":       "Visits deleted successfully",
+			"deleted_count": rowsAffected,
+		})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // handleScanHistory returns the most recent 10 scan events (newest first)
@@ -634,7 +681,7 @@ func handleMember(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Delete from database (CASCADE will delete related sessions)
+		// Delete from database (CASCADE will delete related visits)
 		result, err := db.Exec(`DELETE FROM members WHERE id = ?`, id)
 		if err != nil {
 			log.Printf("Error deleting member: %v", err)
@@ -813,11 +860,11 @@ func handleSignoutAll(w http.ResponseWriter, r *http.Request) {
 	// Persist cleared state
 	_ = saveCurrentAttendees()
 
-	// Save sessions for those who were signed out
+	// Save visits for those who were signed out
 	for uid, signinTime := range toSignOut {
 		signOutTime := time.Now()
-		if err := saveSessionToDB(userDB[uid].ID, signinTime, signOutTime); err != nil {
-			log.Printf("Error saving session to database during signout all: %v", err)
+		if err := saveVisitToDB(userDB[uid].ID, signinTime, signOutTime); err != nil {
+			log.Printf("Error saving visit to database during signout all: %v", err)
 		}
 	}
 
@@ -1056,9 +1103,9 @@ func main() {
 
 	http.HandleFunc("/scan", wrapRoute(handleScan))                             // POST: ESP32 sends UID here
 	http.HandleFunc("/current", wrapRoute(handleCurrent))                       // GET: See who is in the room
-	http.HandleFunc("/history", wrapRoute(handleHistory))                       // GET: See past logs
+	http.HandleFunc("/visits", wrapRoute(handleVisits))                         // GET: retrieve visits, DELETE: delete visits
 	http.HandleFunc("/scan-history", wrapRoute(handleScanHistory))              // GET: See recent scan events
-	http.HandleFunc("/members/", wrapRoute(handleMember))                       // PUT: update member by ID
+	http.HandleFunc("/members/", wrapRoute(handleMember))                       // PUT: update member by ID, DELETE: delete member by ID
 	http.HandleFunc("/members", wrapRoute(handleMembers))                       // GET: list members, POST: create member
 	http.HandleFunc("/count", wrapRoute(handleCount))                           // GET: get current attendee count
 	http.HandleFunc("/health", corsMiddleware(handleHealth))                    // GET: health check (no API key needed)

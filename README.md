@@ -1,6 +1,6 @@
 # IEEE Office Backend
 
-Simple Go HTTP service to track office attendance using RFID/UID scans (designed for ESP32 or similar devices). It records sign-in and sign-out events, keeps an in-memory list of current attendees, and persists historical sessions to a local SQLite database.
+Simple Go HTTP service to track office attendance using RFID/UID scans (designed for ESP32 or similar devices). It records sign-in and sign-out events, keeps an in-memory list of current attendees, and persists visits to a local SQLite database.
 
 Can be used by the [IEEE Office Scanner ESP32](https://github.com/ieee-uottawa/ieee-office-scanner-esp32) device and the [IEEE Office Discord Bot](https://github.com/ieee-uottawa/ieee-office-discord-bot) to provide office presence tracking.
 
@@ -8,7 +8,7 @@ Can be used by the [IEEE Office Scanner ESP32](https://github.com/ieee-uottawa/i
 
 - **Scan endpoint**: Accepts POSTed UID payloads from an RFID reader to toggle sign-in / sign-out.
 - **Current attendees**: Returns who is currently in the room and when they signed in.
-- **History**: Stores completed sessions (signin + signout) in SQLite and exposes them via an API.
+- **Visits management**: Retrieve, filter, and delete completed visits (signin + signout) stored in SQLite via API.
 - **Scan history**: Keeps the last 10 scans in memory (uid + timestamp) and exposes them via an API.
 - **Members management**: Create/list registered members (UID, name, discord_id) via API; import/export members with JSON file.
 - **Discord sign-in/out**: Sign in or out by providing a member's `discord_id`.
@@ -18,7 +18,7 @@ Can be used by the [IEEE Office Scanner ESP32](https://github.com/ieee-uottawa/i
 
 ## Files of interest
 
-- `main.go` — application source with HTTP handlers for `/scan`, `/current`, `/history`, and `/members`.
+- `main.go` — application source with HTTP handlers for `/scan`, `/current`, `/visits`, and `/members`.
 - `Dockerfile` — multi-stage build for producing a small runtime container.
 - `docker-compose.yml` — convenient compose file to run the service locally.
 - `data/` — folder for runtime files: `members.json`, `current_attendees.json`, `attendance.db`.
@@ -96,13 +96,13 @@ Persistent Data & File Layout
 ```
 
 - `data/current_attendees.json` — automatically written/loaded by the server to track currently signed-in UIDs.
-- `data/attendance.db` — SQLite DB file created by the app to store members and sessions.
+- `data/attendance.db` — SQLite DB file created by the app to store members and visits.
 
 ## HTTP API
 
 - `POST /scan` — body: `{ "uid": "<UID string>" }`. The server will:
       - Return `status: "in"` on successful sign-in.
-      - Return `status: "out"` on sign-out and persist a session to the DB.
+      - Return `status: "out"` on sign-out and persist a visit to the DB.
       - Unknown UID returns HTTP `403 Forbidden`.
 
 Example:
@@ -124,27 +124,44 @@ curl http://localhost:8080/scan_history
 curl http://localhost:8080/current
 ```
 
-- `GET /history` — returns historical sessions (name, signin_time, signout_time). Supports optional query parameters for filtering:
-  - `from` - RFC3339 formatted start date (inclusive) to filter sessions from this date onwards
-  - `to` - RFC3339 formatted end date (inclusive) to filter sessions up to this date
+- `GET /visits` — returns visits (name, signin_time, signout_time). Supports optional query parameters for filtering:
+  - `from` - RFC3339 formatted start date (inclusive) to filter visits from this date onwards
+  - `to` - RFC3339 formatted end date (inclusive) to filter visits up to this date
   - `limit` - maximum number of records to return (newest first)
 
 ```bash
 # Get all history
-curl http://localhost:8080/history
+curl http://localhost:8080/visits
 
 # Get history from a specific date
-curl "http://localhost:8080/history?from=2024-01-01T00:00:00Z"
+curl "http://localhost:8080/visits?from=2024-01-01T00:00:00Z"
 
 # Get history within a date range
-curl "http://localhost:8080/history?from=2024-01-01T00:00:00Z&to=2024-12-31T23:59:59Z"
+curl "http://localhost:8080/visits?from=2024-01-01T00:00:00Z&to=2024-12-31T23:59:59Z"
 
-# Get the 10 most recent sessions
-curl "http://localhost:8080/history?limit=10"
+# Get the 10 most recent visits
+curl "http://localhost:8080/visits?limit=10"
 
-# Combine filters: get 50 most recent sessions from January 2024
-curl "http://localhost:8080/history?from=2024-01-01T00:00:00Z&to=2024-01-31T23:59:59Z&limit=50"
+# Combine filters: get 50 most recent visits from January 2024
+curl "http://localhost:8080/visits?from=2024-01-01T00:00:00Z&to=2024-01-31T23:59:59Z&limit=50"
 ```
+
+- `DELETE /visits` — delete visits based on date range. Requires at least one filter (`from` or `to`) to prevent accidental deletion of all visits.
+  - `from` - RFC3339 formatted start date to delete visits from this date onwards
+  - `to` - RFC3339 formatted end date to delete visits up to this date
+
+```bash
+# Delete all visits from January 2024 onwards
+curl -X DELETE "http://localhost:8080/visits?from=2024-01-01T00:00:00Z"
+
+# Delete all visits up to December 2023
+curl -X DELETE "http://localhost:8080/visits?to=2023-12-31T23:59:59Z"
+
+# Delete visits within a specific date range
+curl -X DELETE "http://localhost:8080/visits?from=2024-01-01T00:00:00Z&to=2024-01-31T23:59:59Z"
+```
+
+Returns the number of visits deleted. Returns `400` if no filters are provided.
 
 - `GET /members` — returns registered members stored in the DB.
 
@@ -174,7 +191,7 @@ Returns the updated member on success, `404` if member not found, or `409` if th
 curl -X DELETE http://localhost:8080/members/1
 ```
 
-Returns a success message on deletion, `404` if member not found, or `409` if the member is currently signed in. Note: Deleting a member will cascade delete all associated session history.
+Returns a success message on deletion, `404` if member not found, or `409` if the member is currently signed in. Note: Deleting a member will cascade delete all associated visit history.
 
 - `GET /count` — returns the count of currently signed-in attendees.
 
@@ -260,10 +277,10 @@ All tests use in-memory SQLite databases for speed and isolation.
 ## Implementation Notes
 
 - Concurrency: shared in-memory maps are protected by an `RWMutex`. File I/O and DB operations are performed outside of locks where possible to avoid blocking.
-- Nightly cleanup at 4:00 AM clears active attendees. Sign out times are set to 4:00 AM for those sessions.
+- Nightly cleanup at 4:00 AM clears active attendees. Sign out times are set to 4:00 AM for those visits.
 
 ## Extending / Next steps
 
 - Add authentication for management endpoints.
-- Add pagination/filters for `/history`.
+- Add pagination/filters for `/visits`.
 - Add metrics for monitoring.

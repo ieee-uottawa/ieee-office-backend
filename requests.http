@@ -28,8 +28,8 @@ Accept: {{json}}
 Headers:
   x-api-key: {{api-key}}
 
-### Get attendance history
-GET {{host}}/history
+### Get visits (attendance history)
+GET {{host}}/visits
 Accept: {{json}}
 Headers:
   x-api-key: {{api-key}}
