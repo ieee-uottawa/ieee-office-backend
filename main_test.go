@@ -1288,3 +1288,188 @@ func TestIntegration_ScanWithoutAPIKeyWhenRequired(t *testing.T) {
 		t.Errorf("expected authentication error, got %v", response["error"])
 	}
 }
+
+func TestHandleMember_UpdateSuccess(t *testing.T) {
+	setupTest()
+
+	// Update Alice's information
+	payload := []byte(`{"name":"Alice Updated","uid":"TEST_UID_1","discord_id":"999999999"}`)
+	req, _ := http.NewRequest("PUT", "/members/1", bytes.NewBuffer(payload))
+	rr := httptest.NewRecorder()
+
+	handleMember(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200 OK, got %v; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var m Member
+	if err := json.Unmarshal(rr.Body.Bytes(), &m); err != nil {
+		t.Fatalf("failed to parse response JSON: %v", err)
+	}
+	if m.Name != "Alice Updated" || m.UID != "TEST_UID_1" || m.DiscordID != "999999999" {
+		t.Fatalf("unexpected member returned: %+v", m)
+	}
+
+	// Verify DB has the updated member
+	row := db.QueryRow(`SELECT name, uid, discord_id FROM members WHERE id = ?`, 1)
+	var name, uid, discordID string
+	if err := row.Scan(&name, &uid, &discordID); err != nil {
+		t.Fatalf("member not found in DB: %v", err)
+	}
+	if name != "Alice Updated" || uid != "TEST_UID_1" || discordID != "999999999" {
+		t.Fatalf("expected updated values, got name=%q uid=%q discord_id=%q", name, uid, discordID)
+	}
+
+	// Verify cache was reloaded
+	if userDB["TEST_UID_1"].Name != "Alice Updated" {
+		t.Fatalf("cache not updated, got name=%q", userDB["TEST_UID_1"].Name)
+	}
+}
+
+func TestHandleMember_UpdateNotFound(t *testing.T) {
+	setupTest()
+
+	// Try to update non-existent member
+	payload := []byte(`{"name":"Nobody","uid":"TEST_UID_999","discord_id":"000000000"}`)
+	req, _ := http.NewRequest("PUT", "/members/999", bytes.NewBuffer(payload))
+	rr := httptest.NewRecorder()
+
+	handleMember(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404 Not Found, got %v", rr.Code)
+	}
+}
+
+func TestHandleMember_UpdateDuplicateUID(t *testing.T) {
+	setupTest()
+
+	// Try to update Alice to use Bob's UID
+	payload := []byte(`{"name":"Alice","uid":"TEST_UID_2","discord_id":"111111111"}`)
+	req, _ := http.NewRequest("PUT", "/members/1", bytes.NewBuffer(payload))
+	rr := httptest.NewRecorder()
+
+	handleMember(rr, req)
+
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected status 409 Conflict for duplicate UID, got %v", rr.Code)
+	}
+}
+
+func TestHandleMember_UpdateInvalidJSON(t *testing.T) {
+	setupTest()
+
+	req, _ := http.NewRequest("PUT", "/members/1", bytes.NewBuffer([]byte("{invalid")))
+	rr := httptest.NewRecorder()
+
+	handleMember(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request, got %v", rr.Code)
+	}
+}
+
+func TestHandleMember_UpdateMissingFields(t *testing.T) {
+	setupTest()
+
+	// Missing discord_id
+	payload := []byte(`{"name":"Alice","uid":"TEST_UID_1"}`)
+	req, _ := http.NewRequest("PUT", "/members/1", bytes.NewBuffer(payload))
+	rr := httptest.NewRecorder()
+
+	handleMember(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for missing discord_id, got %v", rr.Code)
+	}
+}
+
+func TestHandleMember_UpdateEmptyFields(t *testing.T) {
+	setupTest()
+
+	// Empty name
+	payload := []byte(`{"name":"","uid":"TEST_UID_1","discord_id":"111111111"}`)
+	req, _ := http.NewRequest("PUT", "/members/1", bytes.NewBuffer(payload))
+	rr := httptest.NewRecorder()
+
+	handleMember(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for empty name, got %v", rr.Code)
+	}
+}
+
+func TestHandleMember_UpdateInvalidID(t *testing.T) {
+	setupTest()
+
+	payload := []byte(`{"name":"Alice","uid":"TEST_UID_1","discord_id":"111111111"}`)
+	req, _ := http.NewRequest("PUT", "/members/abc", bytes.NewBuffer(payload))
+	rr := httptest.NewRecorder()
+
+	handleMember(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for invalid ID, got %v", rr.Code)
+	}
+}
+
+func TestHandleMember_UpdateNoID(t *testing.T) {
+	setupTest()
+
+	payload := []byte(`{"name":"Alice","uid":"TEST_UID_1","discord_id":"111111111"}`)
+	req, _ := http.NewRequest("PUT", "/members/", bytes.NewBuffer(payload))
+	rr := httptest.NewRecorder()
+
+	handleMember(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for missing ID, got %v", rr.Code)
+	}
+}
+
+func TestHandleMember_MethodNotAllowed(t *testing.T) {
+	setupTest()
+
+	req, _ := http.NewRequest("GET", "/members/1", nil)
+	rr := httptest.NewRecorder()
+
+	handleMember(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405 Method Not Allowed, got %v", rr.Code)
+	}
+}
+
+func TestHandleMember_UpdateWithWhitespace(t *testing.T) {
+	setupTest()
+
+	// Test that whitespace is trimmed
+	payload := []byte(`{"name":"  Alice Trimmed  ","uid":" TEST_UID_1 ","discord_id":" 888888888 "}`)
+	req, _ := http.NewRequest("PUT", "/members/1", bytes.NewBuffer(payload))
+	rr := httptest.NewRecorder()
+
+	handleMember(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200 OK, got %v; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var m Member
+	if err := json.Unmarshal(rr.Body.Bytes(), &m); err != nil {
+		t.Fatalf("failed to parse response JSON: %v", err)
+	}
+	if m.Name != "Alice Trimmed" || m.UID != "TEST_UID_1" || m.DiscordID != "888888888" {
+		t.Fatalf("whitespace not trimmed correctly: %+v", m)
+	}
+
+	// Verify DB has trimmed values
+	row := db.QueryRow(`SELECT name, uid, discord_id FROM members WHERE id = ?`, 1)
+	var name, uid, discordID string
+	if err := row.Scan(&name, &uid, &discordID); err != nil {
+		t.Fatalf("member not found in DB: %v", err)
+	}
+	if name != "Alice Trimmed" || uid != "TEST_UID_1" || discordID != "888888888" {
+		t.Fatalf("whitespace not trimmed in DB: name=%q uid=%q discord_id=%q", name, uid, discordID)
+	}
+}

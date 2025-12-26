@@ -518,6 +518,77 @@ func handleScanHistory(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(history)
 }
 
+// handleMember handles updating a single member by ID (PUT)
+func handleMember(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract member ID from URL path (e.g., /members/123)
+	path := r.URL.Path
+	idStr := strings.TrimPrefix(path, "/members/")
+	if idStr == "" || idStr == path {
+		http.Error(w, "Member ID required in path", http.StatusBadRequest)
+		return
+	}
+
+	var id int64
+	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
+		http.Error(w, "Invalid member ID", http.StatusBadRequest)
+		return
+	}
+
+	// Parse update request
+	var req struct {
+		Name      string `json:"name"`
+		UID       string `json:"uid"`
+		DiscordID string `json:"discord_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	req.Name = strings.TrimSpace(req.Name)
+	req.UID = strings.TrimSpace(req.UID)
+	req.DiscordID = strings.TrimSpace(req.DiscordID)
+
+	if req.Name == "" || req.UID == "" || req.DiscordID == "" {
+		http.Error(w, "name, uid, and discord_id are required", http.StatusBadRequest)
+		return
+	}
+
+	// Update in database
+	result, err := db.Exec(`UPDATE members SET name = ?, uid = ?, discord_id = ? WHERE id = ?`,
+		req.Name, req.UID, req.DiscordID, id)
+	if err != nil {
+		// Handle unique constraint on uid
+		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "unique") {
+			http.Error(w, "UID already exists", http.StatusConflict)
+			return
+		}
+		log.Printf("Error updating member: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, "Member not found", http.StatusNotFound)
+		return
+	}
+
+	// Reload cache to reflect changes
+	if err := loadMembersIntoCache(); err != nil {
+		log.Printf("Warning: Failed to reload members cache: %v", err)
+	}
+
+	member := Member{ID: id, Name: req.Name, UID: req.UID, DiscordID: req.DiscordID}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(member)
+}
+
 // handleMembers supports POST to create a new member and GET to list members
 func handleMembers(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -867,6 +938,7 @@ func main() {
 	http.HandleFunc("/current", wrapRoute(handleCurrent))                       // GET: See who is in the room
 	http.HandleFunc("/history", wrapRoute(handleHistory))                       // GET: See past logs
 	http.HandleFunc("/scan-history", wrapRoute(handleScanHistory))              // GET: See recent scan events
+	http.HandleFunc("/members/", wrapRoute(handleMember))                       // PUT: update member by ID
 	http.HandleFunc("/members", wrapRoute(handleMembers))                       // GET: list members, POST: create member
 	http.HandleFunc("/count", wrapRoute(handleCount))                           // GET: get current attendee count
 	http.HandleFunc("/health", corsMiddleware(handleHealth))                    // GET: health check (no API key needed)

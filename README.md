@@ -143,6 +143,15 @@ curl -X POST http://localhost:8080/members -H 'Content-Type: application/json' \
     -d '{"name":"Charlie","uid":"UID_123","discord_id":"333333333"}'
 ```
 
+- `PUT /members/{id}` — update an existing member by ID. Body: `{ "name": "Charlie Updated", "uid": "UID_123", "discord_id": "333333333" }`.
+
+```bash
+curl -X PUT http://localhost:8080/members/1 -H 'Content-Type: application/json' \
+    -d '{"name":"Charlie Updated","uid":"UID_123","discord_id":"333333333"}'
+```
+
+Returns the updated member on success, `404` if member not found, or `409` if the UID conflicts with another member.
+
 - `GET /count` — returns the count of currently signed-in attendees.
 
 ```bash
