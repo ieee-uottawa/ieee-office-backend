@@ -416,17 +416,19 @@ func startNightlyCleanup() {
 		<-timer.C
 
 		// Copy and clear under lock, then persist outside
-		mu.Lock()
 		cnt := len(currentAttendees)
 		if cnt > 0 {
 			log.Printf("Nightly Cleanup: Force signing out %d people", cnt)
 			toSignOut := currentAttendees
+			mu.Lock()
 			currentAttendees = make(map[string]time.Time)
 			mu.Unlock()
 
 			for uid, signin := range toSignOut {
 				saveVisitToDB(userDB[uid].ID, signin, time.Now())
 			}
+		} else {
+			log.Println("Nightly Cleanup: No attendees to sign out")
 		}
 	}
 }
