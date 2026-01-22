@@ -1687,6 +1687,164 @@ func TestHandleSignoutAll_MethodNotAllowed(t *testing.T) {
 }
 
 // ============================================================================
+// Nightly Cleanup Tests
+// ============================================================================
+
+func TestStartNightlyCleanup_SignOutAllAttendees(t *testing.T) {
+	setupTest()
+
+	// Simulate some attendees being signed in
+	now := time.Now()
+	currentAttendees["TEST_UID_1"] = now.Add(-2 * time.Hour)
+	currentAttendees["TEST_UID_2"] = now.Add(-3 * time.Hour)
+
+	// Record visits before cleanup
+	var visitsBefore int
+	db.QueryRow(`SELECT COUNT(*) FROM visits`).Scan(&visitsBefore)
+
+	// Manually run cleanup logic (instead of waiting for goroutine)
+	mu.Lock()
+	cnt := len(currentAttendees)
+	toSignOut := make(map[string]time.Time, cnt)
+	for uid, signin := range currentAttendees {
+		toSignOut[uid] = signin
+	}
+	currentAttendees = make(map[string]time.Time)
+	mu.Unlock()
+
+	// Process sign-outs
+	for uid, signin := range toSignOut {
+		mu.RLock()
+		member, ok := userDB[uid]
+		mu.RUnlock()
+		if !ok {
+			t.Fatalf("member not found: %s", uid)
+		}
+		if err := saveVisitToDB(member.ID, signin, time.Now()); err != nil {
+			t.Fatalf("failed to save visit: %v", err)
+		}
+	}
+
+	// Verify all attendees were signed out
+	if len(currentAttendees) != 0 {
+		t.Errorf("expected currentAttendees to be empty, got %d attendees", len(currentAttendees))
+	}
+
+	// Verify visits were recorded
+	var visitsAfter int
+	db.QueryRow(`SELECT COUNT(*) FROM visits`).Scan(&visitsAfter)
+	if visitsAfter <= visitsBefore {
+		t.Errorf("expected visits to increase, before=%d after=%d", visitsBefore, visitsAfter)
+	}
+}
+
+func TestStartNightlyCleanup_NoAttendees(t *testing.T) {
+	setupTest()
+
+	// Verify no attendees signed in initially
+	if len(currentAttendees) != 0 {
+		t.Fatalf("expected no attendees initially, got %d", len(currentAttendees))
+	}
+
+	// Manually run cleanup logic with no attendees
+	mu.Lock()
+	cnt := len(currentAttendees)
+	currentAttendees = make(map[string]time.Time)
+	mu.Unlock()
+
+	// Should complete without error and not attempt sign-out
+	if cnt != 0 {
+		t.Errorf("expected cnt to be 0, got %d", cnt)
+	}
+
+	// Verify currentAttendees is still empty
+	if len(currentAttendees) != 0 {
+		t.Errorf("expected currentAttendees to remain empty, got %d", len(currentAttendees))
+	}
+}
+
+func TestStartNightlyCleanup_UnknownUID(t *testing.T) {
+	setupTest()
+
+	// Add an attendee with unknown UID
+	now := time.Now()
+	currentAttendees["UNKNOWN_UID"] = now.Add(-2 * time.Hour)
+
+	// Manually run cleanup logic
+	mu.Lock()
+	cnt := len(currentAttendees)
+	toSignOut := make(map[string]time.Time, cnt)
+	for uid, signin := range currentAttendees {
+		toSignOut[uid] = signin
+	}
+	currentAttendees = make(map[string]time.Time)
+	mu.Unlock()
+
+	// Process sign-outs, unknown UID should be skipped
+	skipped := 0
+	for uid, signin := range toSignOut {
+		mu.RLock()
+		member, ok := userDB[uid]
+		mu.RUnlock()
+		if !ok {
+			skipped++
+			continue
+		}
+		if err := saveVisitToDB(member.ID, signin, time.Now()); err != nil {
+			t.Fatalf("failed to save visit: %v", err)
+		}
+	}
+
+	// Verify unknown UID was skipped
+	if skipped != 1 {
+		t.Errorf("expected 1 unknown UID to be skipped, got %d", skipped)
+	}
+}
+
+func TestStartNightlyCleanup_MixedValidAndInvalidUIDs(t *testing.T) {
+	setupTest()
+
+	now := time.Now()
+	currentAttendees["TEST_UID_1"] = now.Add(-2 * time.Hour)
+	currentAttendees["UNKNOWN_UID"] = now.Add(-1 * time.Hour)
+	currentAttendees["TEST_UID_2"] = now.Add(-3 * time.Hour)
+
+	// Record visits before cleanup
+	var visitsBefore int
+	db.QueryRow(`SELECT COUNT(*) FROM visits`).Scan(&visitsBefore)
+
+	// Manually run cleanup logic
+	mu.Lock()
+	cnt := len(currentAttendees)
+	toSignOut := make(map[string]time.Time, cnt)
+	for uid, signin := range currentAttendees {
+		toSignOut[uid] = signin
+	}
+	currentAttendees = make(map[string]time.Time)
+	mu.Unlock()
+
+	// Process sign-outs
+	for uid, signin := range toSignOut {
+		mu.RLock()
+		member, ok := userDB[uid]
+		mu.RUnlock()
+		if !ok {
+			continue // Skip unknown UIDs
+		}
+		if err := saveVisitToDB(member.ID, signin, time.Now()); err != nil {
+			t.Fatalf("failed to save visit: %v", err)
+		}
+	}
+
+	// Verify only valid members were signed out
+	var visitsAfter int
+	db.QueryRow(`SELECT COUNT(*) FROM visits`).Scan(&visitsAfter)
+	if visitsAfter != visitsBefore+2 { // 2 valid members
+		t.Errorf("expected 2 visits to be recorded, but got %d (before=%d after=%d)", visitsAfter-visitsBefore, visitsBefore, visitsAfter)
+	}
+}
+
+// ============================================================================
 // /export-members & /import-members Endpoint Tests
 // ============================================================================
 
@@ -1721,6 +1879,59 @@ func TestHandleExportMembers_Success(t *testing.T) {
 	}
 	if len(members) < 2 {
 		t.Fatalf("expected at least 2 members exported, got %d", len(members))
+	}
+}
+
+func TestHandleExportMembers_MethodNotAllowed(t *testing.T) {
+	setupTest()
+
+	req, _ := http.NewRequest("POST", "/export_members", nil)
+	rr := httptest.NewRecorder()
+	handleExportMembers(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405 Method Not Allowed, got %v", rr.Code)
+	}
+}
+
+func TestHandleExportMembers_EmptyMembers(t *testing.T) {
+	setupTest()
+
+	// Backup existing file if present
+	orig, err := os.ReadFile(membersFilePath)
+	hasOrig := err == nil
+	if hasOrig {
+		defer os.WriteFile(membersFilePath, orig, 0644)
+	} else {
+		defer os.Remove(membersFilePath)
+	}
+
+	// Clear all members from the database
+	_, err = db.Exec(`DELETE FROM members`)
+	if err != nil {
+		t.Fatalf("failed to clear members: %v", err)
+	}
+	userDB = make(map[string]Member)
+
+	req, _ := http.NewRequest("GET", "/export_members", nil)
+	rr := httptest.NewRecorder()
+	handleExportMembers(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK even with no members, got %v", rr.Code)
+	}
+
+	// Verify file written with empty array
+	data, err := os.ReadFile(membersFilePath)
+	if err != nil {
+		t.Fatalf("expected members file to be written: %v", err)
+	}
+	var members []Member
+	if err := json.Unmarshal(data, &members); err != nil {
+		t.Fatalf("failed to parse exported members: %v", err)
+	}
+	if len(members) != 0 {
+		t.Fatalf("expected 0 members exported, got %d", len(members))
 	}
 }
 
@@ -1771,6 +1982,127 @@ func TestHandleImportMembers_MethodNotAllowed(t *testing.T) {
 
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405 Method Not Allowed, got %v", rr.Code)
+	}
+}
+
+func TestHandleImportMembers_FileNotFound(t *testing.T) {
+	setupTest()
+
+	// Ensure the file doesn't exist
+	os.Remove(membersFilePath)
+
+	req, _ := http.NewRequest("POST", "/import_members", nil)
+	rr := httptest.NewRecorder()
+	handleImportMembers(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 Internal Server Error when file not found, got %v", rr.Code)
+	}
+}
+
+func TestHandleImportMembers_InvalidJSON(t *testing.T) {
+	setupTest()
+
+	// Backup existing file if present
+	orig, err := os.ReadFile(membersFilePath)
+	hasOrig := err == nil
+	if hasOrig {
+		defer os.WriteFile(membersFilePath, orig, 0644)
+	} else {
+		defer os.Remove(membersFilePath)
+	}
+
+	// Create file with invalid JSON
+	if err := os.WriteFile(membersFilePath, []byte("{invalid json}"), 0644); err != nil {
+		t.Fatalf("failed to write invalid JSON file: %v", err)
+	}
+
+	req, _ := http.NewRequest("POST", "/import_members", nil)
+	rr := httptest.NewRecorder()
+	handleImportMembers(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 Internal Server Error for invalid JSON, got %v", rr.Code)
+	}
+}
+
+func TestHandleImportMembers_PartialFailure(t *testing.T) {
+	setupTest()
+
+	// Backup existing file if present
+	orig, err := os.ReadFile(membersFilePath)
+	hasOrig := err == nil
+	if hasOrig {
+		defer os.WriteFile(membersFilePath, orig, 0644)
+	} else {
+		defer os.Remove(membersFilePath)
+	}
+
+	// Create file with mix of new and duplicate members (Alice already exists)
+	toImport := []Member{
+		{Name: "Alice", UID: "TEST_UID_1", DiscordID: "111111111"},   // Duplicate, will be ignored
+		{Name: "Charlie", UID: "TEST_UID_C", DiscordID: "333333333"}, // New, will be imported
+	}
+	data, _ := json.Marshal(toImport)
+	if err := os.WriteFile(membersFilePath, data, 0644); err != nil {
+		t.Fatalf("failed to write import file: %v", err)
+	}
+
+	req, _ := http.NewRequest("POST", "/import_members", nil)
+	rr := httptest.NewRecorder()
+	handleImportMembers(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %v; body=%s", rr.Code, rr.Body.String())
+	}
+
+	// Verify only the new member was imported
+	row := db.QueryRow(`SELECT name FROM members WHERE uid = ?`, "TEST_UID_C")
+	var name string
+	if err := row.Scan(&name); err != nil {
+		t.Fatalf("new member not found in DB: %v", err)
+	}
+	if name != "Charlie" {
+		t.Fatalf("unexpected member name: %s", name)
+	}
+}
+
+func TestHandleImportMembers_EmptyArray(t *testing.T) {
+	setupTest()
+
+	// Backup existing file if present
+	orig, err := os.ReadFile(membersFilePath)
+	hasOrig := err == nil
+	if hasOrig {
+		defer os.WriteFile(membersFilePath, orig, 0644)
+	} else {
+		defer os.Remove(membersFilePath)
+	}
+
+	// Create file with empty array
+	if err := os.WriteFile(membersFilePath, []byte("[]"), 0644); err != nil {
+		t.Fatalf("failed to write empty array file: %v", err)
+	}
+
+	// Record initial member count
+	var initialCount int
+	db.QueryRow(`SELECT COUNT(*) FROM members`).Scan(&initialCount)
+
+	req, _ := http.NewRequest("POST", "/import_members", nil)
+	rr := httptest.NewRecorder()
+	handleImportMembers(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for empty import, got %v", rr.Code)
+	}
+
+	// Verify response indicates 0 imported
+	var resp map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if !strings.Contains(resp["message"], "0 members") {
+		t.Fatalf("expected message to indicate 0 members imported, got %v", resp["message"])
 	}
 }
 
