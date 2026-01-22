@@ -422,16 +422,29 @@ func startNightlyCleanup() {
 		<-timer.C
 
 		// Copy and clear under lock, then persist outside
+		mu.Lock()
 		cnt := len(currentAttendees)
+		toSignOut := make(map[string]time.Time, cnt)
+		for uid, signin := range currentAttendees {
+			toSignOut[uid] = signin
+		}
+		currentAttendees = make(map[string]time.Time)
+		mu.Unlock()
+
 		if cnt > 0 {
 			log.Printf("Nightly Cleanup: Force signing out %d people", cnt)
-			toSignOut := currentAttendees
-			mu.Lock()
-			currentAttendees = make(map[string]time.Time)
-			mu.Unlock()
-
 			for uid, signin := range toSignOut {
-				saveVisitToDB(userDB[uid].ID, signin, time.Now())
+				mu.RLock()
+				member, ok := userDB[uid]
+				mu.RUnlock()
+				if !ok {
+					log.Printf("Nightly Cleanup: skipping unknown UID %s in current attendees", uid)
+					continue
+				}
+
+				if err := saveVisitToDB(member.ID, signin, time.Now()); err != nil {
+					log.Printf("Nightly Cleanup: failed to save visit for UID %s: %v", uid, err)
+				}
 			}
 		} else {
 			log.Println("Nightly Cleanup: No attendees to sign out")
@@ -919,9 +932,17 @@ func handleSignoutAll(w http.ResponseWriter, r *http.Request) {
 
 	// Save visits for those who were signed out
 	for uid, signinTime := range toSignOut {
+		mu.RLock()
+		member, ok := userDB[uid]
+		mu.RUnlock()
+		if !ok {
+			log.Printf("Sign-out-all: skipping unknown UID %s in current attendees", uid)
+			continue
+		}
+
 		signOutTime := time.Now()
-		if err := saveVisitToDB(userDB[uid].ID, signinTime, signOutTime); err != nil {
-			log.Printf("Error saving visit to database during signout all: %v", err)
+		if err := saveVisitToDB(member.ID, signinTime, signOutTime); err != nil {
+			log.Printf("Error saving visit to database during signout all for UID %s: %v", uid, err)
 		}
 	}
 
