@@ -53,6 +53,16 @@ GET {{host}}/visits?from={{from}}&to={{to}}&limit=10
 Accept: {{json}}
 X-API-Key: {{api-key}}
 
+### Visits — filter by member_id
+GET {{host}}/visits?member_id=1&limit=25
+Accept: {{json}}
+X-API-Key: {{api-key}}
+
+### Visits — CSV export (optional filters supported)
+GET {{host}}/visits?format=csv&from={{from}}&to={{to}}
+Accept: text/csv
+X-API-Key: {{api-key}}
+
 ### Visits — delete by from (requires from or to)
 DELETE {{host}}/visits?from={{from}}
 Accept: {{json}}
@@ -60,6 +70,11 @@ X-API-Key: {{api-key}}
 
 ### Visits — delete by to (requires from or to)
 DELETE {{host}}/visits?to={{to}}
+Accept: {{json}}
+X-API-Key: {{api-key}}
+
+### Visits — delete by member_id
+DELETE {{host}}/visits?member_id=1&from={{from}}&to={{to}}
 Accept: {{json}}
 X-API-Key: {{api-key}}
 
