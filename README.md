@@ -127,6 +127,7 @@ curl http://localhost:8080/current
 - `GET /visits` — returns visits (name, signin_time, signout_time). Supports optional query parameters for filtering:
   - `from` - RFC3339 formatted start date (inclusive) to filter visits from this date onwards
   - `to` - RFC3339 formatted end date (inclusive) to filter visits up to this date
+  - `member_id` - filter visits by specific member ID
   - `limit` - maximum number of records to return (newest first)
 
 ```bash
@@ -142,13 +143,17 @@ curl "http://localhost:8080/visits?from=2024-01-01T00:00:00Z&to=2024-12-31T23:59
 # Get the 10 most recent visits
 curl "http://localhost:8080/visits?limit=10"
 
-# Combine filters: get 50 most recent visits from January 2024
-curl "http://localhost:8080/visits?from=2024-01-01T00:00:00Z&to=2024-01-31T23:59:59Z&limit=50"
+# Get all visits for a specific member
+curl "http://localhost:8080/visits?member_id=5"
+
+# Combine filters: get 50 most recent visits from member 5 in January 2024
+curl "http://localhost:8080/visits?member_id=5&from=2024-01-01T00:00:00Z&to=2024-01-31T23:59:59Z&limit=50"
 ```
 
-- `DELETE /visits` — delete visits based on date range. Requires at least one filter (`from` or `to`) to prevent accidental deletion of all visits.
+- `DELETE /visits` — delete visits based on filters. Requires at least one filter (`from`, `to`, or `member_id`) to prevent accidental deletion of all visits.
   - `from` - RFC3339 formatted start date to delete visits from this date onwards
   - `to` - RFC3339 formatted end date to delete visits up to this date
+  - `member_id` - delete visits for a specific member ID
 
 ```bash
 # Delete all visits from January 2024 onwards
@@ -159,6 +164,12 @@ curl -X DELETE "http://localhost:8080/visits?to=2023-12-31T23:59:59Z"
 
 # Delete visits within a specific date range
 curl -X DELETE "http://localhost:8080/visits?from=2024-01-01T00:00:00Z&to=2024-01-31T23:59:59Z"
+
+# Delete all visits for a specific member
+curl -X DELETE "http://localhost:8080/visits?member_id=5"
+
+# Delete visits for a specific member within a date range
+curl -X DELETE "http://localhost:8080/visits?member_id=5&from=2024-01-01T00:00:00Z&to=2024-01-31T23:59:59Z"
 ```
 
 Returns the number of visits deleted. Returns `400` if no filters are provided.

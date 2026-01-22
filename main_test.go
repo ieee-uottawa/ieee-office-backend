@@ -782,6 +782,152 @@ func TestHandleVisits_NegativeLimit(t *testing.T) {
 	}
 }
 
+func TestHandleVisits_WithMemberIDFilter(t *testing.T) {
+	setupTest()
+
+	// Insert visits for different members
+	baseTime := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
+	// 3 visits for member 1 (Alice)
+	for i := 0; i < 3; i++ {
+		signinTime := baseTime.Add(time.Duration(i) * time.Hour)
+		signoutTime := signinTime.Add(30 * time.Minute)
+		_, err := db.Exec(`INSERT INTO visits (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+			1, signinTime.Format(time.RFC3339), signoutTime.Format(time.RFC3339))
+		if err != nil {
+			t.Fatalf("failed inserting visit: %v", err)
+		}
+	}
+	// 2 visits for member 2 (Bob)
+	for i := 3; i < 5; i++ {
+		signinTime := baseTime.Add(time.Duration(i) * time.Hour)
+		signoutTime := signinTime.Add(30 * time.Minute)
+		_, err := db.Exec(`INSERT INTO visits (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+			2, signinTime.Format(time.RFC3339), signoutTime.Format(time.RFC3339))
+		if err != nil {
+			t.Fatalf("failed inserting visit: %v", err)
+		}
+	}
+
+	// Filter by member_id=1 (Alice)
+	req, _ := http.NewRequest("GET", "/visits?member_id=1", nil)
+	rr := httptest.NewRecorder()
+
+	handleVisits(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %v", rr.Code)
+	}
+
+	var visits []Visit
+	if err := json.Unmarshal(rr.Body.Bytes(), &visits); err != nil {
+		t.Fatalf("failed to parse visits: %v", err)
+	}
+
+	if len(visits) != 3 {
+		t.Fatalf("expected 3 visits for member 1, got %d", len(visits))
+	}
+
+	// Verify all visits are for Alice
+	for _, v := range visits {
+		if v.Name != "Alice" {
+			t.Fatalf("expected all visits to be for Alice, got %s", v.Name)
+		}
+	}
+}
+
+func TestHandleVisits_WithMemberIDAndDateFilters(t *testing.T) {
+	setupTest()
+
+	// Insert visits for different members at different times
+	baseTime := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
+	// 5 visits for member 1 (Alice) over 5 hours
+	for i := 0; i < 5; i++ {
+		signinTime := baseTime.Add(time.Duration(i) * time.Hour)
+		signoutTime := signinTime.Add(30 * time.Minute)
+		_, err := db.Exec(`INSERT INTO visits (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+			1, signinTime.Format(time.RFC3339), signoutTime.Format(time.RFC3339))
+		if err != nil {
+			t.Fatalf("failed inserting visit: %v", err)
+		}
+	}
+	// 3 visits for member 2 (Bob) over 3 hours
+	for i := 0; i < 3; i++ {
+		signinTime := baseTime.Add(time.Duration(i) * time.Hour)
+		signoutTime := signinTime.Add(30 * time.Minute)
+		_, err := db.Exec(`INSERT INTO visits (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+			2, signinTime.Format(time.RFC3339), signoutTime.Format(time.RFC3339))
+		if err != nil {
+			t.Fatalf("failed inserting visit: %v", err)
+		}
+	}
+
+	// Filter by member_id=1 and time range (hours 1-3)
+	from := baseTime.Add(1 * time.Hour).Format(time.RFC3339)
+	to := baseTime.Add(3 * time.Hour).Format(time.RFC3339)
+	req, _ := http.NewRequest("GET", fmt.Sprintf("/visits?member_id=1&from=%s&to=%s", from, to), nil)
+	rr := httptest.NewRecorder()
+
+	handleVisits(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %v", rr.Code)
+	}
+
+	var visits []Visit
+	if err := json.Unmarshal(rr.Body.Bytes(), &visits); err != nil {
+		t.Fatalf("failed to parse visits: %v", err)
+	}
+
+	if len(visits) != 3 {
+		t.Fatalf("expected 3 visits for member 1 in time range, got %d", len(visits))
+	}
+
+	// Verify all visits are for Alice
+	for _, v := range visits {
+		if v.Name != "Alice" {
+			t.Fatalf("expected all visits to be for Alice, got %s", v.Name)
+		}
+	}
+}
+
+func TestHandleVisits_InvalidMemberID(t *testing.T) {
+	setupTest()
+
+	req, _ := http.NewRequest("GET", "/visits?member_id=abc", nil)
+	rr := httptest.NewRecorder()
+
+	handleVisits(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for invalid member_id, got %v", rr.Code)
+	}
+}
+
+func TestHandleVisits_ZeroMemberID(t *testing.T) {
+	setupTest()
+
+	// Insert visits for members
+	baseTime := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 2; i++ {
+		signinTime := baseTime.Add(time.Duration(i) * time.Hour)
+		signoutTime := signinTime.Add(30 * time.Minute)
+		_, err := db.Exec(`INSERT INTO visits (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+			1, signinTime.Format(time.RFC3339), signoutTime.Format(time.RFC3339))
+		if err != nil {
+			t.Fatalf("failed inserting visit: %v", err)
+		}
+	}
+
+	req, _ := http.NewRequest("GET", "/visits?member_id=0", nil)
+	rr := httptest.NewRecorder()
+
+	handleVisits(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for member_id=0, got %v", rr.Code)
+	}
+}
+
 // ============================================================================
 // /visits Endpoint Tests (DELETE - Removal with Filters)
 // ============================================================================
@@ -957,6 +1103,162 @@ func TestHandleDeleteVisits_NoFilters(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected 1 visit to remain, got %d", count)
+	}
+}
+
+func TestHandleDeleteVisits_WithMemberIDFilter(t *testing.T) {
+	setupTest()
+
+	// Insert visits for different members
+	baseTime := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
+	// 3 visits for member 1 (Alice)
+	for i := 0; i < 3; i++ {
+		signinTime := baseTime.Add(time.Duration(i) * time.Hour)
+		signoutTime := signinTime.Add(30 * time.Minute)
+		_, err := db.Exec(`INSERT INTO visits (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+			1, signinTime.Format(time.RFC3339), signoutTime.Format(time.RFC3339))
+		if err != nil {
+			t.Fatalf("failed inserting visit: %v", err)
+		}
+	}
+	// 2 visits for member 2 (Bob)
+	for i := 0; i < 2; i++ {
+		signinTime := baseTime.Add(time.Duration(i+3) * time.Hour)
+		signoutTime := signinTime.Add(30 * time.Minute)
+		_, err := db.Exec(`INSERT INTO visits (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+			2, signinTime.Format(time.RFC3339), signoutTime.Format(time.RFC3339))
+		if err != nil {
+			t.Fatalf("failed inserting visit: %v", err)
+		}
+	}
+
+	// Delete visits for member 1 only
+	req, _ := http.NewRequest("DELETE", "/visits?member_id=1", nil)
+	rr := httptest.NewRecorder()
+
+	handleVisits(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %v; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	deletedCount := int(resp["deleted_count"].(float64))
+	if deletedCount != 3 {
+		t.Fatalf("expected 3 visits deleted, got %d", deletedCount)
+	}
+
+	// Verify 2 visits remain (for member 2)
+	var remaining int
+	err := db.QueryRow(`SELECT COUNT(*) FROM visits`).Scan(&remaining)
+	if err != nil {
+		t.Fatalf("error querying visits: %v", err)
+	}
+	if remaining != 2 {
+		t.Fatalf("expected 2 visits remaining, got %d", remaining)
+	}
+
+	// Verify remaining visits are for member 2
+	var memberID int
+	err = db.QueryRow(`SELECT member_id FROM visits LIMIT 1`).Scan(&memberID)
+	if err != nil {
+		t.Fatalf("error querying remaining visits: %v", err)
+	}
+	if memberID != 2 {
+		t.Fatalf("expected remaining visits to be for member 2, got member %d", memberID)
+	}
+}
+
+func TestHandleDeleteVisits_WithMemberIDAndDateFilters(t *testing.T) {
+	setupTest()
+
+	// Insert visits for member 1 at different times
+	baseTime := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		signinTime := baseTime.Add(time.Duration(i) * time.Hour)
+		signoutTime := signinTime.Add(30 * time.Minute)
+		_, err := db.Exec(`INSERT INTO visits (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+			1, signinTime.Format(time.RFC3339), signoutTime.Format(time.RFC3339))
+		if err != nil {
+			t.Fatalf("failed inserting visit: %v", err)
+		}
+	}
+	// Insert visits for member 2 at same times
+	for i := 0; i < 5; i++ {
+		signinTime := baseTime.Add(time.Duration(i) * time.Hour)
+		signoutTime := signinTime.Add(30 * time.Minute)
+		_, err := db.Exec(`INSERT INTO visits (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+			2, signinTime.Format(time.RFC3339), signoutTime.Format(time.RFC3339))
+		if err != nil {
+			t.Fatalf("failed inserting visit: %v", err)
+		}
+	}
+
+	// Delete visits for member 1 between hours 1-3
+	from := baseTime.Add(1 * time.Hour).Format(time.RFC3339)
+	to := baseTime.Add(3 * time.Hour).Format(time.RFC3339)
+	req, _ := http.NewRequest("DELETE", fmt.Sprintf("/visits?member_id=1&from=%s&to=%s", from, to), nil)
+	rr := httptest.NewRecorder()
+
+	handleVisits(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %v; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	deletedCount := int(resp["deleted_count"].(float64))
+	if deletedCount != 3 {
+		t.Fatalf("expected 3 visits deleted (member 1, hours 1-3), got %d", deletedCount)
+	}
+
+	// Verify 7 visits remain (2 for member 1 + 5 for member 2)
+	var remaining int
+	err := db.QueryRow(`SELECT COUNT(*) FROM visits`).Scan(&remaining)
+	if err != nil {
+		t.Fatalf("error querying visits: %v", err)
+	}
+	if remaining != 7 {
+		t.Fatalf("expected 7 visits remaining, got %d", remaining)
+	}
+
+	// Verify member 1 has 2 visits left
+	var member1Count int
+	err = db.QueryRow(`SELECT COUNT(*) FROM visits WHERE member_id = 1`).Scan(&member1Count)
+	if err != nil {
+		t.Fatalf("error querying member 1 visits: %v", err)
+	}
+	if member1Count != 2 {
+		t.Fatalf("expected 2 visits remaining for member 1, got %d", member1Count)
+	}
+
+	// Verify member 2 has 5 visits (untouched)
+	var member2Count int
+	err = db.QueryRow(`SELECT COUNT(*) FROM visits WHERE member_id = 2`).Scan(&member2Count)
+	if err != nil {
+		t.Fatalf("error querying member 2 visits: %v", err)
+	}
+	if member2Count != 5 {
+		t.Fatalf("expected 5 visits remaining for member 2, got %d", member2Count)
+	}
+}
+
+func TestHandleDeleteVisits_InvalidMemberID(t *testing.T) {
+	setupTest()
+
+	req, _ := http.NewRequest("DELETE", "/visits?member_id=invalid", nil)
+	rr := httptest.NewRecorder()
+
+	handleVisits(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for invalid member_id, got %v", rr.Code)
 	}
 }
 

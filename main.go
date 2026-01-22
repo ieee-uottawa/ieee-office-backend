@@ -205,8 +205,9 @@ func saveVisitToDB(memberID int64, signin time.Time, signout time.Time) error {
 // loadVisitsFromDB retrieves visits from the database with optional filtering
 // from: RFC3339 formatted start date (inclusive)
 // to: RFC3339 formatted end date (inclusive)
+// memberID: filter by specific member ID (0 means no filter)
 // limit: maximum number of records to return (0 means no limit)
-func loadVisitsFromDB(from, to string, limit int) ([]Visit, error) {
+func loadVisitsFromDB(from, to string, memberID int64, limit int) ([]Visit, error) {
 	query := `
 		SELECT m.name, v.signin_time, v.signout_time
 		FROM visits v
@@ -223,6 +224,10 @@ func loadVisitsFromDB(from, to string, limit int) ([]Visit, error) {
 	if to != "" {
 		conditions = append(conditions, "v.signin_time <= ?")
 		args = append(args, to)
+	}
+	if memberID > 0 {
+		conditions = append(conditions, "v.member_id = ?")
+		args = append(args, memberID)
 	}
 
 	// Build WHERE clause if we have conditions
@@ -522,16 +527,19 @@ func handleCurrent(w http.ResponseWriter, r *http.Request) {
 // Query parameters for GET:
 //   - from: RFC3339 formatted start date (e.g., 2024-01-01T00:00:00Z)
 //   - to: RFC3339 formatted end date (e.g., 2024-12-31T23:59:59Z)
+//   - member_id: filter by specific member ID (e.g., 123)
 //   - limit: maximum number of records to return (e.g., 100)
 //
 // Query parameters for DELETE:
 //   - from: RFC3339 formatted start date (e.g., 2024-01-01T00:00:00Z)
 //   - to: RFC3339 formatted end date (e.g., 2024-12-31T23:59:59Z)
+//   - member_id: filter by specific member ID (e.g., 123)
 func handleVisits(w http.ResponseWriter, r *http.Request) {
 	// Parse query parameters
 	queryParams := r.URL.Query()
 	from := queryParams.Get("from")
 	to := queryParams.Get("to")
+	memberIDStr := queryParams.Get("member_id")
 
 	// Validate from date if provided
 	if from != "" {
@@ -549,6 +557,15 @@ func handleVisits(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Parse and validate member_id if provided
+	var memberID int64
+	if memberIDStr != "" {
+		if n, err := fmt.Sscanf(memberIDStr, "%d", &memberID); err != nil || n != 1 || memberID < 1 {
+			http.Error(w, "Invalid 'member_id' parameter, expected positive integer", http.StatusBadRequest)
+			return
+		}
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		limitStr := queryParams.Get("limit")
@@ -560,7 +577,7 @@ func handleVisits(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		visits, err := loadVisitsFromDB(from, to, limit)
+		visits, err := loadVisitsFromDB(from, to, memberID, limit)
 		if err != nil {
 			log.Printf("Error loading visits from database: %v", err)
 			http.Error(w, "Error loading visits", http.StatusInternalServerError)
@@ -572,8 +589,8 @@ func handleVisits(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodDelete:
 		// Require at least one filter to prevent accidental deletion of all visits
-		if from == "" && to == "" {
-			http.Error(w, "At least one filter (from or to) is required to delete visits", http.StatusBadRequest)
+		if from == "" && to == "" && memberID == 0 {
+			http.Error(w, "At least one filter (from, to, or member_id) is required to delete visits", http.StatusBadRequest)
 			return
 		}
 
@@ -589,6 +606,10 @@ func handleVisits(w http.ResponseWriter, r *http.Request) {
 		if to != "" {
 			conditions = append(conditions, "signin_time <= ?")
 			args = append(args, to)
+		}
+		if memberID > 0 {
+			conditions = append(conditions, "member_id = ?")
+			args = append(args, memberID)
 		}
 
 		if len(conditions) > 0 {
