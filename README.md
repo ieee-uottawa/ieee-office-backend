@@ -8,7 +8,7 @@ Can be used by the [IEEE Office Scanner ESP32](https://github.com/ieee-uottawa/i
 
 - **Scan endpoint**: Accepts POSTed UID payloads from an RFID reader to toggle sign-in / sign-out.
 - **Current attendees**: Returns who is currently in the room and when they signed in.
-- **Visits management**: Retrieve, filter, and delete completed visits (signin + signout) stored in SQLite via API.
+- **Visits management**: Retrieve, filter, and delete completed visits (signin + signout) stored in SQLite via API; export visits as CSV.
 - **Scan history**: Keeps the last 10 scans in memory (uid + timestamp) and exposes them via an API.
 - **Members management**: Create/list registered members (UID, name, discord_id) via API; import/export members with JSON file.
 - **Discord sign-in/out**: Sign in or out by providing a member's `discord_id`.
@@ -84,7 +84,7 @@ docker run --rm -p 8080:8080 -v "$(pwd)/data:/data" ieee-office-backend:latest
 docker compose up --build
 ```
 
-Persistent Data & File Layout
+## Persistent Data & File Layout
 
 - `data/members.json` — used by the export/import endpoints. Expected format: a JSON array of members, each with `name`, `uid`, and `discord_id`. Example:
 
@@ -100,6 +100,26 @@ Persistent Data & File Layout
 
 ## HTTP API
 
+### Authentication
+
+If API keys are configured (see Configuration and Security sections), all endpoints except `/health` require the `X-API-Key` header for authentication.
+
+**Without API key** (when no keys are configured):
+
+```bash
+curl http://localhost:8080/current
+```
+
+**With API key** (when authentication is enabled):
+
+```bash
+curl http://localhost:8080/current -H 'X-API-Key: your-api-key-here'
+```
+
+All examples below show commands without API keys for brevity. Add `-H 'X-API-Key: your-api-key-here'` to any request when authentication is enabled.
+
+### Endpoints
+
 - `POST /scan` — body: `{ "uid": "<UID string>" }`. The server will:
       - Return `status: "in"` on successful sign-in.
       - Return `status: "out"` on sign-out and persist a visit to the DB.
@@ -110,12 +130,16 @@ Example:
 ```bash
 curl -X POST http://localhost:8080/scan -H 'Content-Type: application/json' \
     -d '{"uid":"UID_ABC_123"}'
+
+# With API key:
+curl -X POST http://localhost:8080/scan -H 'Content-Type: application/json' \
+    -H 'X-API-Key: your-api-key-here' -d '{"uid":"UID_ABC_123"}'
 ```
 
-- `GET /scan_history` — returns the last 10 scans (newest first). Each item has `uid` and `time` (RFC3339).
+- `GET /scan-history` — returns the last 10 scans (newest first). Each item has `uid` and `time` (RFC3339).
 
 ```bash
-curl http://localhost:8080/scan_history
+curl http://localhost:8080/scan-history
 ```
 
 - `GET /current` — returns JSON array of currently signed-in users (name + signin_time).
@@ -227,38 +251,38 @@ Response: `{"count": 3}`
 curl http://localhost:8080/health
 ```
 
-- `POST /signout_all` — signs out all currently signed-in attendees. Returns a message with the count of people signed out.
+- `POST /sign-out-all` — signs out all currently signed-in attendees. Returns a message with the count of people signed out.
 
 ```bash
-curl -X POST http://localhost:8080/signout_all
+curl -X POST http://localhost:8080/sign-out-all
 ```
 
 Response: `{"message": "Signed out all attendees (3 total)."}`
 
-- `POST /signin_discord` — sign in a member by Discord ID. Body: `{ "discord_id": "111111111" }`.
+- `POST /sign-in-discord` — sign in a member by Discord ID. Body: `{ "discord_id": "111111111" }`.
 
 ```bash
-curl -X POST http://localhost:8080/signin_discord -H 'Content-Type: application/json' \
+curl -X POST http://localhost:8080/sign-in-discord -H 'Content-Type: application/json' \
     -d '{"discord_id":"111111111"}'
 ```
 
-- `POST /signout_discord` — sign out a member by Discord ID. Body: `{ "discord_id": "111111111" }`.
+- `POST /sign-out-discord` — sign out a member by Discord ID. Body: `{ "discord_id": "111111111" }`.
 
 ```bash
-curl -X POST http://localhost:8080/signout_discord -H 'Content-Type: application/json' \
+curl -X POST http://localhost:8080/sign-out-discord -H 'Content-Type: application/json' \
     -d '{"discord_id":"111111111"}'
 ```
 
-- `GET /export_members` — export all members to `data/members.json`.
+- `GET /export-members` — export all members to `data/members.json`.
 
 ```bash
-curl http://localhost:8080/export_members
+curl http://localhost:8080/export-members
 ```
 
-- `POST /import_members` — import members from `data/members.json` into the database (existing UIDs are ignored).
+- `POST /import-members` — import members from `data/members.json` into the database (existing UIDs are ignored).
 
 ```bash
-curl -X POST http://localhost:8080/import_members
+curl -X POST http://localhost:8080/import-members
 ```
 
 ## Testing
