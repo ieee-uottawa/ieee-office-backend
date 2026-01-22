@@ -129,9 +129,10 @@ curl http://localhost:8080/current
   - `to` - RFC3339 formatted end date (inclusive) to filter visits up to this date
   - `member_id` - filter visits by specific member ID
   - `limit` - maximum number of records to return (newest first)
+  - `format` - output format: `json` (default) or `csv` for CSV file download
 
 ```bash
-# Get all history
+# Get all history as JSON (default)
 curl http://localhost:8080/visits
 
 # Get history from a specific date
@@ -148,7 +149,15 @@ curl "http://localhost:8080/visits?member_id=5"
 
 # Combine filters: get 50 most recent visits from member 5 in January 2024
 curl "http://localhost:8080/visits?member_id=5&from=2024-01-01T00:00:00Z&to=2024-01-31T23:59:59Z&limit=50"
+
+# Export all visits as CSV file
+curl "http://localhost:8080/visits?format=csv" -o visits.csv
+
+# Export filtered visits as CSV (all filters work with CSV format)
+curl "http://localhost:8080/visits?format=csv&from=2024-01-01T00:00:00Z&to=2024-12-31T23:59:59Z" -o visits.csv
 ```
+
+The CSV export includes columns: Name, Sign In Time, Sign Out Time, and Duration.
 
 - `DELETE /visits` — delete visits based on filters. Requires at least one filter (`from`, `to`, or `member_id`) to prevent accidental deletion of all visits.
   - `from` - RFC3339 formatted start date to delete visits from this date onwards

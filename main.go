@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -540,6 +541,7 @@ func handleVisits(w http.ResponseWriter, r *http.Request) {
 	from := queryParams.Get("from")
 	to := queryParams.Get("to")
 	memberIDStr := queryParams.Get("member_id")
+	format := queryParams.Get("format")
 
 	// Validate from date if provided
 	if from != "" {
@@ -581,6 +583,38 @@ func handleVisits(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Printf("Error loading visits from database: %v", err)
 			http.Error(w, "Error loading visits", http.StatusInternalServerError)
+			return
+		}
+
+		// Check if CSV format is requested
+		if format == "csv" {
+			// Set headers for CSV file download
+			w.Header().Set("Content-Type", "text/csv")
+			w.Header().Set("Content-Disposition", "attachment; filename=visits.csv")
+
+			// Create CSV writer
+			writer := csv.NewWriter(w)
+			defer writer.Flush()
+
+			// Write CSV header
+			if err := writer.Write([]string{"Name", "Sign In Time", "Sign Out Time", "Duration"}); err != nil {
+				log.Printf("Error writing CSV header: %v", err)
+				return
+			}
+
+			// Write visit records
+			for _, v := range visits {
+				duration := v.SignOutTime.Sub(v.SignInTime).Round(time.Second).String()
+				if err := writer.Write([]string{
+					v.Name,
+					v.SignInTime.Format(time.RFC3339),
+					v.SignOutTime.Format(time.RFC3339),
+					duration,
+				}); err != nil {
+					log.Printf("Error writing CSV record: %v", err)
+					return
+				}
+			}
 			return
 		}
 
@@ -1126,7 +1160,7 @@ func main() {
 
 	http.HandleFunc("/scan", wrapRoute(handleScan))                             // POST: ESP32 sends UID here
 	http.HandleFunc("/current", wrapRoute(handleCurrent))                       // GET: See who is in the room
-	http.HandleFunc("/visits", wrapRoute(handleVisits))                         // GET: retrieve visits, DELETE: delete visits
+	http.HandleFunc("/visits", wrapRoute(handleVisits))                         // GET: retrieve visits (JSON or CSV with ?format=csv), DELETE: delete visits
 	http.HandleFunc("/scan-history", wrapRoute(handleScanHistory))              // GET: See recent scan events
 	http.HandleFunc("/members/", wrapRoute(handleMember))                       // PUT: update member by ID, DELETE: delete member by ID
 	http.HandleFunc("/members", wrapRoute(handleMembers))                       // GET: list members, POST: create member

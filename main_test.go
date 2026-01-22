@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -925,6 +926,167 @@ func TestHandleVisits_ZeroMemberID(t *testing.T) {
 
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 Bad Request for member_id=0, got %v", rr.Code)
+	}
+}
+
+// ============================================================================
+// /visits Endpoint Tests (CSV Export)
+// ============================================================================
+
+func TestHandleVisits_CSVExport_Empty(t *testing.T) {
+	setupTest()
+
+	req, _ := http.NewRequest("GET", "/visits?format=csv", nil)
+	rr := httptest.NewRecorder()
+
+	handleVisits(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %v", rr.Code)
+	}
+
+	// Check CSV content type
+	contentType := rr.Header().Get("Content-Type")
+	if contentType != "text/csv" {
+		t.Fatalf("expected Content-Type text/csv, got %s", contentType)
+	}
+
+	// Check Content-Disposition header
+	disposition := rr.Header().Get("Content-Disposition")
+	if disposition != "attachment; filename=visits.csv" {
+		t.Fatalf("expected Content-Disposition with filename, got %s", disposition)
+	}
+
+	// Verify CSV has only header row
+	body := rr.Body.String()
+	lines := strings.Split(strings.TrimSpace(body), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line (header only), got %d", len(lines))
+	}
+
+	if lines[0] != "Name,Sign In Time,Sign Out Time,Duration" {
+		t.Fatalf("unexpected CSV header: %s", lines[0])
+	}
+}
+
+func TestHandleVisits_CSVExport_WithData(t *testing.T) {
+	setupTest()
+
+	// Insert test visits
+	baseTime := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	signinTime1 := baseTime
+	signoutTime1 := baseTime.Add(1 * time.Hour)
+	signinTime2 := baseTime.Add(2 * time.Hour)
+	signoutTime2 := baseTime.Add(3 * time.Hour)
+
+	_, err := db.Exec(`INSERT INTO visits (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+		1, signinTime1.Format(time.RFC3339), signoutTime1.Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("failed inserting visit 1: %v", err)
+	}
+
+	_, err = db.Exec(`INSERT INTO visits (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+		2, signinTime2.Format(time.RFC3339), signoutTime2.Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("failed inserting visit 2: %v", err)
+	}
+
+	req, _ := http.NewRequest("GET", "/visits?format=csv", nil)
+	rr := httptest.NewRecorder()
+
+	handleVisits(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %v", rr.Code)
+	}
+
+	// Check headers
+	if rr.Header().Get("Content-Type") != "text/csv" {
+		t.Fatalf("expected Content-Type text/csv")
+	}
+
+	// Verify CSV content
+	body := rr.Body.String()
+	lines := strings.Split(strings.TrimSpace(body), "\n")
+
+	// Should have header + 2 data rows (newest first)
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines (header + 2 visits), got %d", len(lines))
+	}
+
+	// Check header
+	if lines[0] != "Name,Sign In Time,Sign Out Time,Duration" {
+		t.Fatalf("unexpected CSV header: %s", lines[0])
+	}
+
+	// Check that data rows contain expected names (order is newest first)
+	if !strings.Contains(body, "Alice") {
+		t.Fatal("CSV should contain Alice")
+	}
+	if !strings.Contains(body, "Bob") {
+		t.Fatal("CSV should contain Bob")
+	}
+
+	// Check that duration is present
+	if !strings.Contains(body, "1h0m0s") {
+		t.Fatal("CSV should contain duration 1h0m0s")
+	}
+}
+
+func TestHandleVisits_CSVExport_WithFilters(t *testing.T) {
+	setupTest()
+
+	// Insert visits for both members at different times
+	baseTime := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	for i := 0; i < 3; i++ {
+		signinTime := baseTime.Add(time.Duration(i) * time.Hour)
+		signoutTime := signinTime.Add(30 * time.Minute)
+		_, err := db.Exec(`INSERT INTO visits (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+			1, signinTime.Format(time.RFC3339), signoutTime.Format(time.RFC3339))
+		if err != nil {
+			t.Fatalf("failed inserting visit for Alice: %v", err)
+		}
+	}
+	for i := 3; i < 6; i++ {
+		signinTime := baseTime.Add(time.Duration(i) * time.Hour)
+		signoutTime := signinTime.Add(30 * time.Minute)
+		_, err := db.Exec(`INSERT INTO visits (member_id, signin_time, signout_time) VALUES (?, ?, ?)`,
+			2, signinTime.Format(time.RFC3339), signoutTime.Format(time.RFC3339))
+		if err != nil {
+			t.Fatalf("failed inserting visit for Bob: %v", err)
+		}
+	}
+
+	// Test CSV export with multiple filters (member_id, from, limit)
+	from := baseTime.Add(1 * time.Hour).Format(time.RFC3339)
+	req, _ := http.NewRequest("GET", "/visits?format=csv&member_id=1&from="+from+"&limit=2", nil)
+	rr := httptest.NewRecorder()
+
+	handleVisits(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %v", rr.Code)
+	}
+
+	// Verify it's CSV
+	if rr.Header().Get("Content-Type") != "text/csv" {
+		t.Fatal("expected CSV content type")
+	}
+
+	body := rr.Body.String()
+	lines := strings.Split(strings.TrimSpace(body), "\n")
+
+	// Should have header + 2 data rows (Alice's visits from hour 1 and 2, limited to 2)
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines (header + 2 visits), got %d", len(lines))
+	}
+
+	// Verify only Alice is in the CSV (member_id filter working)
+	if !strings.Contains(body, "Alice") {
+		t.Fatal("CSV should contain Alice")
+	}
+	if strings.Contains(body, "Bob") {
+		t.Fatal("CSV should not contain Bob (member_id filter should exclude)")
 	}
 }
 
