@@ -445,6 +445,11 @@ func startNightlyCleanup() {
 				if err := saveVisitToDB(member.ID, signin, time.Now()); err != nil {
 					log.Printf("Nightly Cleanup: failed to save visit for UID %s: %v", uid, err)
 				}
+
+				// Save the cleared currentAttendees to file
+				if err := saveCurrentAttendees(); err != nil {
+					log.Printf("Nightly Cleanup: failed to save current attendees: %v", err)
+				}
 			}
 		} else {
 			log.Println("Nightly Cleanup: No attendees to sign out")
